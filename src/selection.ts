@@ -2,15 +2,14 @@ import { realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { TypeSafeClient } from '@typesafe-ai/sdk';
 import createDebug from 'debug';
-
-const debug = createDebug('jev-playwright:selection');
-
 import { runBatches } from './batch.js';
 import type { JevPlaywrightConfig, ResolvedConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
 import type { Changes } from './git.js';
 import { createRequest } from './prompt.js';
 import { fitsRequestLimits } from './request-limits.js';
+
+const debug = createDebug('jev-playwright:selection');
 
 /** A discovered Playwright test. IDs must be unique within a selection call. */
 export interface TestDescriptor {
