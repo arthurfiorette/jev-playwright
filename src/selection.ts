@@ -14,6 +14,10 @@ export interface TestDescriptor {
   file: string;
   title: string;
   project?: string;
+  /** Playwright source line for distinguishing tests with the same title. */
+  line?: number;
+  /** Playwright source column for distinguishing tests on the same line. */
+  column?: number;
   /** Optional source context supplied by Playwright or the caller. */
   source?: string;
 }
@@ -69,6 +73,54 @@ function forcedIds(tests: TestDescriptor[], files: string[], cwd: string): Set<s
     if (files.some((file) => sameFile(file, test.file, cwd))) ids.add(test.id);
   }
   return ids;
+}
+
+interface CandidateGroup {
+  representative: TestDescriptor;
+  members: TestDescriptor[];
+}
+
+function groupCandidates(candidates: TestDescriptor[], config: ResolvedConfig): CandidateGroup[] {
+  const groups: CandidateGroup[] = [];
+  const byTest = new Map<string, CandidateGroup>();
+
+  for (const test of candidates) {
+    const key = JSON.stringify([
+      resolve(config.cwd, test.file),
+      test.title,
+      test.line ?? null,
+      test.column ?? null
+    ]);
+    const group = byTest.get(key);
+    if (
+      !config.perProject &&
+      group &&
+      !group.members.some((member) => member.project === test.project)
+    ) {
+      group.members.push(test);
+      continue;
+    }
+
+    // The shared decision intentionally has no browser label when projects are grouped.
+    const { project, ...shared } = test;
+    const created: CandidateGroup = {
+      representative: config.perProject ? test : shared,
+      members: [test]
+    };
+    groups.push(created);
+    if (!config.perProject && !group) byTest.set(key, created);
+  }
+
+  return groups;
+}
+
+function expandAssessments(groups: CandidateGroup[], assessments: Assessment[]): Assessment[] {
+  const byId = new Map(assessments.map((assessment) => [assessment.id, assessment]));
+  return groups.flatMap((group) => {
+    const assessment = byId.get(group.representative.id);
+    if (!assessment) throw new Error(`Missing Jev answer for ${group.representative.id}`);
+    return group.members.map((member) => ({ ...assessment, id: member.id }));
+  });
 }
 
 function sdkClient(
@@ -296,6 +348,12 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
   if (!candidates.length)
     return { selectedIds: input.tests.map((test) => test.id), assessments: [] };
   try {
+    const groups = groupCandidates(candidates, config);
+    debugLog(config.debug, 'candidate groups', {
+      discovered: candidates.length,
+      questions: groups.length,
+      perProject: config.perProject
+    });
     const changes = {
       ...input.changes,
       files: modelFiles,
@@ -304,12 +362,12 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
         : {})
     };
     const assessments = await assessEveryChange(
-      candidates,
+      groups.map((group) => group.representative),
       changes,
       config,
       sdkClient(input, config)
     );
-    return buildSelection(input.tests, forced, assessments, config);
+    return buildSelection(input.tests, forced, expandAssessments(groups, assessments), config);
   } catch (error) {
     // A partial batch cannot safely exclude candidates that were never evaluated.
     return allTests(input.tests, String(error));

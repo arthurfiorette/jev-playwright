@@ -55,6 +55,8 @@ export interface JevPlaywrightConfig {
   includeTestSource?: boolean;
   /** Maximum JavaScript lexical tokens per test when enabled. @default 5000 */
   maxTestSourceTokens?: number;
+  /** Judge the same test separately per Playwright project/browser. @default false */
+  perProject?: boolean;
   /** Pin this model when tuning a threshold. @default 'jev-latest' */
   model?: string;
   /** SDK API root for custom providers. @default TypeSafe SDK base URL */
@@ -252,6 +254,10 @@ export function resolveConfig(
       ) ??
       config.maxTestSourceTokens ??
       5000,
+    perProject:
+      parseBoolean(readEnv(env, 'PER_PROJECT'), 'JEV_PLAYWRIGHT_PER_PROJECT') ??
+      config.perProject ??
+      false,
     model: readEnv(env, 'MODEL') ?? config.model ?? 'jev-latest',
     providerUrl: readEnv(env, 'PROVIDER_URL') ?? config.providerUrl,
     providerKey: readEnv(env, 'PROVIDER_KEY') ?? config.providerKey,

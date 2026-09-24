@@ -70,9 +70,11 @@ Playwright discovers tests first, applying its usual project, grep, and `.only` 
 
 1. Reads the git change set. Locally, this includes staged, unstaged, and untracked files. In CI, it [detects a baseline](#use-it-in-ci).
 2. Always runs directly changed specs. It omits those specs from Jev's candidate tests and git patch context. Other changed files, including shared E2E fixtures, remain in context.
-3. Packs as many candidates as fit into each Jev request. Each test gets its own typed yes/no question containing its title, project, and file path **relative to `cwd`**; the git patch stays in the shared state. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
+3. Packs as many candidates as fit into each Jev request. By default, the same test across Playwright projects shares one typed yes/no question containing its title and file path **relative to `cwd`**; the git patch stays in the shared state. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
 
-Test bodies are **not sent by default**; each question still includes its test title, file, and project. Set `includeTestSource: true` to also send an excerpt from each test declaration through the next discovered test (or the end of the file). This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. The excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
+Test bodies are **not sent by default**; each question still includes its test title and file. Set `includeTestSource: true` to also send an excerpt from each test declaration through the next discovered test (or the end of the file). This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. The excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
+
+`perProject` defaults to `false`: one decision for a test at the same file, title, and source location is applied to its Chromium, Firefox, or WebKit instances. Set `perProject: true` if browser-specific behavior changes relevance; then each question includes its project name and is judged separately. Test IDs and assessments are returned for every Playwright instance in either mode. Question metadata uses compact `|` separators and avoids repeating absolute checkout paths; title words and git patch contents stay intact.
 
 ```ts
 export default defineConfigWithJev(
@@ -113,7 +115,7 @@ Jev currently documents **32k tokens for state plus the longest question**, and 
 
 ### Smart diff selection
 
-The model receives a compact shared **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), and patch text. Each `test_N` question contains that test's title, project, file, and optional source excerpt next to its decision instructions. Question keys alone are not model context. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title or description is unavailable, the checked-out commit subject or body fills the missing field. Explicit `prTitle` and `prDescription` override these hints. Empty fields are omitted. Titles and descriptions are context, not a substitute for code changes.
+The model receives a compact shared **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), and patch text. Each `test_N` question contains that test's title, relative file, optional project, and optional source excerpt next to its decision instructions. Question keys alone are not model context. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title or description is unavailable, the checked-out commit subject or body fills the missing field. Explicit `prTitle` and `prDescription` override these hints. Empty fields are omitted. Titles and descriptions are context, not a substitute for code changes.
 
 PR/commit descriptions are converted from GitHub-flavored Markdown to plain text with `remark`, `remark-gfm`, and `strip-markdown`, then whitespace is collapsed and the result is capped at 2,000 characters (titles at 200). This removes HTML comments, formatting, fenced code, and tables from **the hint only**; it does not change the git patch. If the description contains important code or tabular context, put that information in the changed files or provide a custom `beforeRequest` hook.
 
@@ -250,7 +252,7 @@ export default defineConfigWithJev(
 );
 ```
 
-`beforeRequest` may be async. Keep every `test_N` Noul question; otherwise selection falls back to all tests. The package appends the test title, project, file, and optional source to `createQuestion` output. Keep `createQuestion` deterministic because request packing may call it while sizing candidates. `prDescription` can be supplied alongside `prTitle`.
+`beforeRequest` may be async. Keep every `test_N` Noul question; otherwise selection falls back to all tests. The package appends the test title, relative file, optional project, and optional source to `createQuestion` output. Keep `createQuestion` deterministic because request packing may call it while sizing candidates. `prDescription` can be supplied alongside `prTitle`.
 
 <br />
 
@@ -314,6 +316,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                      | `64000`                                 |
 | `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                        | `100`                                   |
 | `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                 |
+| `perProject`                                | `JEV_PLAYWRIGHT_PER_PROJECT`                                 | `false` (share decisions across projects) |
 | `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                 |
 | `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                            |
 | `prTitle`, `prDescription`                  | `JEV_PLAYWRIGHT_PR_TITLE`, `JEV_PLAYWRIGHT_PR_DESCRIPTION`   | unset                                   |

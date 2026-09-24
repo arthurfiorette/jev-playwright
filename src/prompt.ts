@@ -38,7 +38,7 @@ function changedPaths(changes: Changes): string[] {
 
   return changes.statuses.map((entry) =>
     entry.previousPath
-      ? `${entry.status} ${compactLine(entry.previousPath)} -> ${compactLine(entry.path)}`
+      ? `${entry.status} ${compactLine(entry.previousPath)}->${compactLine(entry.path)}`
       : `${entry.status} ${compactLine(entry.path)}`
   );
 }
@@ -48,15 +48,28 @@ function testPath(file: string, cwd: string): string {
   return relative(cwd, path).replaceAll('\\', '/');
 }
 
-/** Identify the test within instructions because question keys are not model context. */
-export function defaultQuestion(_test: TestDescriptor, key: string): string {
-  return `Could the change affect the assertions or setup of ${key} described below, directly or indirectly?`;
+function testLocation(test: TestDescriptor, cwd: string): string {
+  const file = testPath(test.file, cwd);
+  return test.line === undefined
+    ? file
+    : `${file}:${test.line}${test.column === undefined ? '' : `:${test.column}`}`;
+}
+
+/** Keep the default question focused on the test metadata supplied alongside it. */
+export function defaultQuestion(_test: TestDescriptor, _key: string): string {
+  return 'Could this change affect the assertions or setup of the test below, directly or indirectly?';
 }
 
 function testQuestion(test: TestDescriptor, key: string, config: ResolvedConfig): string {
+  const fields = [
+    key,
+    ...(test.project ? [compactLine(test.project)] : []),
+    compactLine(testLocation(test, config.cwd)),
+    compactLine(test.title)
+  ];
   return [
     (config.createQuestion ?? defaultQuestion)(test, key),
-    `Test: ${key} | ${compactLine(test.project ?? '')} | ${compactLine(testPath(test.file, config.cwd))} | ${compactLine(test.title)}`,
+    `Test:${fields.join('|')}`,
     ...(config.includeTestSource && test.source
       ? [`Test source:\n${limitTestSource(test.source, config.maxTestSourceTokens)}`]
       : [])

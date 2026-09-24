@@ -73,7 +73,9 @@ export class JevReporter implements Reporter {
       const catalog = tests.map((test) => ({
         id: test.id,
         file: test.location.file,
-        title: test.titlePath().slice(3).join(' › ') || test.title,
+        line: test.location.line,
+        column: test.location.column,
+        title: test.titlePath().slice(3).join('›') || test.title,
         project: test.parent.project()?.name ?? ''
       }));
       debugLog(config.debug, 'test source', {

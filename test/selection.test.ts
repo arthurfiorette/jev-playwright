@@ -39,6 +39,11 @@ test('config precedence, glob filtering, and validation', () => {
   );
   assert.equal(config.baseRef, 'main');
   assert.equal(config.threshold, 0.4);
+  assert.equal(config.perProject, false);
+  assert.equal(
+    resolveConfig({ perProject: false }, { JEV_PLAYWRIGHT_PER_PROJECT: 'true' }).perProject,
+    true
+  );
   assert.equal(config.diff.whitespace, 'all');
   assert.deepEqual(filterPaths(['src/a.ts', 'src/generated/b.ts', 'test/a.ts'], config), [
     'src/a.ts'
@@ -157,6 +162,56 @@ test('complete low probabilities select no tests while incomplete answers run al
   assert.equal(noChanges.fallbackReason, 'no included changes');
 });
 
+test('one relevance decision fans out across projects unless perProject is enabled', async () => {
+  const catalog = [
+    { id: 'chrome-a', file: '/repo/e2e/a.spec.ts', title: 'flow', line: 10, project: 'chromium' },
+    { id: 'firefox-a', file: '/repo/e2e/a.spec.ts', title: 'flow', line: 10, project: 'firefox' },
+    { id: 'chrome-b', file: '/repo/e2e/a.spec.ts', title: 'flow', line: 30, project: 'chromium' }
+  ];
+  const requests: string[][] = [];
+  const mock: Pick<TypeSafeClient, 'systemOne'> = {
+    systemOne: (async ({ questions }: { questions: Record<string, { instructions?: string }> }) => {
+      const descriptions = Object.values(questions).map((question) =>
+        String(question.instructions)
+      );
+      requests.push(descriptions);
+      return {
+        model: 'mock',
+        answers: Object.fromEntries(
+          Object.keys(questions).map((key, index) => [
+            key,
+            { type: 'noul', noul: descriptions[index]?.includes(':10|') ? 0.9 : 0.1 }
+          ])
+        )
+      };
+    }) as unknown as TypeSafeClient['systemOne']
+  };
+  const input = {
+    tests: catalog,
+    changes: { files: ['src/feature.ts'] },
+    env: {},
+    client: mock
+  };
+
+  const shared = await selectTests({ ...input, config: { cwd: '/repo', enabled: true } });
+  assert.deepEqual(shared.selectedIds, ['chrome-a', 'firefox-a']);
+  assert.deepEqual(
+    shared.assessments.map((assessment) => assessment.probability),
+    [0.9, 0.9, 0.1]
+  );
+  assert.equal(requests[0]?.length, 2);
+  assert.doesNotMatch(requests[0]?.[0] ?? '', /chromium|firefox/);
+
+  const separate = await selectTests({
+    ...input,
+    config: { cwd: '/repo', enabled: true, perProject: true }
+  });
+  assert.deepEqual(separate.selectedIds, ['chrome-a', 'firefox-a']);
+  assert.equal(requests[1]?.length, 3);
+  assert.match(requests[1]?.[0] ?? '', /chromium/);
+  assert.match(requests[1]?.[1] ?? '', /firefox/);
+});
+
 test('no included files runs all without contacting Jev', async () => {
   const result = await selectTests({
     tests,
@@ -198,7 +253,7 @@ test('custom question and beforeRequest hook customize the SDK request', async (
     }
   });
   assert.match(question, /^Does checkout depend on test_0\?/);
-  assert.match(question, /Test: test_0 \| chromium \| e2e\/a\.spec\.ts \| checkout/);
+  assert.match(question, /Test:test_0\|e2e\/a\.spec\.ts\|checkout/);
   assert.equal(state, '{"feature":"login"}');
   assert.deepEqual(response.selectedIds, ['a']);
 });
@@ -248,7 +303,7 @@ test('string state keeps compact statuses and bounded human hints', () => {
   assert.doesNotMatch(state, /\/repo\/e2e\/a\.spec\.ts/);
   assert.match(
     String(request.questions.test_0?.instructions),
-    /Test: test_0 \| chromium \| e2e\/a\.spec\.ts \| checkout/
+    /Test:test_0\|chromium\|e2e\/a\.spec\.ts\|checkout/
   );
   assert.match(state, /Patch:\n\+updated payments/);
   assert.ok(state.length < 3_000);
