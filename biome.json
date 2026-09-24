@@ -7,5 +7,10 @@
         "useSortedPackageJson": "on"
       }
     }
+  },
+  "javascript": {
+    "formatter": {
+      "bracketSpacing": true
+    }
   }
 }

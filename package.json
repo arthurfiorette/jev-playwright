@@ -1,7 +1,7 @@
 {
   "name": "jev-playwright",
   "version": "0.0.1",
-  "description": "Jev-powered Playwright test selection (coming soon).",
+  "description": "Jev-powered Playwright test selection",
   "keywords": [
     "playwright",
     "jev",
@@ -25,10 +25,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./reporter": {
+      "types": "./dist/reporter.d.ts",
+      "import": "./dist/reporter.js",
+      "default": "./dist/reporter.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
     "format": "biome format --write .",
     "lint": "biome check .",
     "lint-ci": "biome ci .",
@@ -37,14 +42,25 @@
     "test": "tsx --test test/*.test.ts",
     "test-types": "tsc --noEmit"
   },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0",
+    "js-tokens": "^10.0.0"
+  },
   "devDependencies": {
     "@arthurfiorette/biomejs-config": "^2.0.1",
     "@biomejs/biome": "^2.5.14",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.13.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
+  "peerDependencies": {
+    "@playwright/test": ">=1.62.0"
+  },
   "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=24.16"
+  },
   "devEngines": {
     "runtime": {
       "name": "node",
