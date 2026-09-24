@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ResolvedConfig } from './config.js';
 import { filterPaths } from './config.js';
@@ -44,11 +44,14 @@ function parseNameStatus(output: string): ChangedFile[] {
   return entries;
 }
 
-function relevantPaths(paths: string[], config?: ResolvedConfig, excluded?: Set<string>): string[] {
+function relevantPaths(
+  paths: string[],
+  root: string,
+  config?: ResolvedConfig,
+  excluded?: Set<string>
+): string[] {
   const included = config ? filterPaths(paths, config) : paths;
-  return excluded
-    ? included.filter((path) => !excluded.has(resolve(config?.cwd ?? process.cwd(), path)))
-    : included;
+  return excluded ? included.filter((path) => !excluded.has(resolve(root, path))) : included;
 }
 
 function splitGitPatches(diff: string): string[] {
@@ -92,7 +95,7 @@ async function readUntracked(
   config?: ResolvedConfig,
   excluded?: Set<string>
 ): Promise<string[]> {
-  const relevant = relevantPaths(paths, config, excluded);
+  const relevant = relevantPaths(paths, cwd, config, excluded);
   const snippets: string[] = [];
   const maxBytes = config?.limits.stateAndQuestionTokens ?? 32_000;
   let length = 0;
@@ -110,6 +113,8 @@ async function readUntracked(
 
 /** Changed paths and a bounded patch for test relevance decisions. */
 export interface Changes {
+  /** Absolute git root for repo-relative paths in `files`, when collected by getGitChanges. */
+  root?: string;
   files: string[];
   /** Changed-file statuses from git; absent for caller-provided changes. */
   statuses?: ChangedFile[];
@@ -120,12 +125,20 @@ export interface Changes {
   description?: string;
 }
 
-/** Use the checked-out commit subject as a CI hint when PR metadata is unavailable. */
-export async function getCommitTitle(cwd: string): Promise<string | undefined> {
+/** Use the checked-out commit message when provider PR metadata is unavailable. */
+export async function getCommitMessage(
+  cwd: string
+): Promise<Pick<Changes, 'title' | 'description'>> {
   try {
-    return (await runGit(cwd, ['log', '-1', '--format=%s'])).trim() || undefined;
+    const message = await runGit(cwd, ['log', '-1', '--format=%s%n%b']);
+    const [title, ...body] = message.split('\n');
+    const description = body.join('\n').trim();
+    return {
+      ...(title?.trim() ? { title: title.trim() } : {}),
+      ...(description ? { description } : {})
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -136,32 +149,37 @@ export async function getGitChanges(
   config?: ResolvedConfig,
   excludedSpecs: string[] = []
 ): Promise<Changes> {
-  const excluded = new Set(excludedSpecs.map((file) => resolve(cwd, file)));
+  // Git reports names relative to its root, even when invoked inside a workspace package.
+  const root = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
+  const canonicalCwd = await realpath(cwd);
+  const excluded = new Set(
+    excludedSpecs.map((file) => resolve(canonicalCwd, relative(cwd, resolve(cwd, file))))
+  );
 
   if (baseRef) {
-    const base = (await runGit(cwd, ['merge-base', baseRef, 'HEAD'])).trim();
+    const base = (await runGit(root, ['merge-base', baseRef, 'HEAD'])).trim();
     const statuses = parseNameStatus(
-      await runGit(cwd, ['diff', '--find-renames', '--name-status', '-z', base, 'HEAD'])
+      await runGit(root, ['diff', '--find-renames', '--name-status', '-z', base, 'HEAD'])
     );
     const files = statuses.map((entry) => entry.path);
-    const included = relevantPaths(files, config, excluded);
+    const included = relevantPaths(files, root, config, excluded);
     const modelStatuses = statuses.filter((entry) => included.includes(entry.path));
     const diff = included.length
-      ? await runGit(cwd, ['diff', ...diffFlags(config), base, 'HEAD', '--', ...included])
+      ? await runGit(root, ['diff', ...diffFlags(config), base, 'HEAD', '--', ...included])
       : '';
 
-    return { files, statuses: modelStatuses, diff, patches: splitGitPatches(diff) };
+    return { root, files, statuses: modelStatuses, diff, patches: splitGitPatches(diff) };
   }
 
   const [staged, unstaged, untracked] = await Promise.all([
-    runGit(cwd, ['diff', '--cached', '--find-renames', '--name-status', '-z']),
-    runGit(cwd, ['diff', '--find-renames', '--name-status', '-z']),
-    runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])
+    runGit(root, ['diff', '--cached', '--find-renames', '--name-status', '-z']),
+    runGit(root, ['diff', '--find-renames', '--name-status', '-z']),
+    runGit(root, ['ls-files', '--others', '--exclude-standard', '-z'])
   ]);
   const trackedStatuses = [...parseNameStatus(staged), ...parseNameStatus(unstaged)];
   const untrackedPaths = parsePaths(untracked);
   const files = [...new Set([...trackedStatuses.map((entry) => entry.path), ...untrackedPaths])];
-  const included = relevantPaths(files, config, excluded);
+  const included = relevantPaths(files, root, config, excluded);
   const modelStatuses = [
     ...trackedStatuses.filter((entry) => included.includes(entry.path)),
     ...untrackedPaths
@@ -171,16 +189,16 @@ export async function getGitChanges(
 
   const [stagedDiff, unstagedDiff] = included.length
     ? await Promise.all([
-        runGit(cwd, ['diff', '--cached', ...diffFlags(config), '--', ...included]),
-        runGit(cwd, ['diff', ...diffFlags(config), '--', ...included])
+        runGit(root, ['diff', '--cached', ...diffFlags(config), '--', ...included]),
+        runGit(root, ['diff', ...diffFlags(config), '--', ...included])
       ])
     : ['', ''];
   const patches = [
     ...splitGitPatches(stagedDiff),
     ...splitGitPatches(unstagedDiff),
-    ...(await readUntracked(cwd, untrackedPaths, config, excluded))
+    ...(await readUntracked(root, untrackedPaths, config, excluded))
   ];
   const diff = patches.join('\n');
 
-  return { files, statuses: modelStatuses, diff, patches };
+  return { root, files, statuses: modelStatuses, diff, patches };
 }

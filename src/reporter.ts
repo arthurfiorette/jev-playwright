@@ -1,11 +1,10 @@
-import { resolve } from 'node:path';
 import type { Reporter, TestCase } from '@playwright/test/reporter';
 import { detectCiDiff } from './ci.js';
 import type { JevPlaywrightConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
 import { debugLog } from './debug.js';
-import { getCommitTitle, getGitChanges } from './git.js';
-import { selectTests } from './selection.js';
+import { getCommitMessage, getGitChanges } from './git.js';
+import { sameFile, selectTests } from './selection.js';
 import { withTestSource } from './source.js';
 
 /** Playwright 1.62+ reporter that excludes irrelevant tests before execution. */
@@ -53,19 +52,21 @@ export class JevReporter implements Reporter {
         tests.map((test) => test.location.file)
       );
       if (ciDiff.kind === 'ref') {
-        const title =
-          ciDiff.title ?? (config.prTitle ? undefined : await getCommitTitle(config.cwd));
+        const commit =
+          ciDiff.title && ciDiff.description ? undefined : await getCommitMessage(config.cwd);
+        const title = ciDiff.title ?? commit?.title;
+        const description = ciDiff.description ?? commit?.description;
         if (title) changes.title = title;
-        if (ciDiff.description) changes.description = ciDiff.description;
+        if (description) changes.description = description;
       }
-      const changed = new Set(changes.files.map((file) => resolve(config.cwd, file)));
+      const root = changes.root ?? config.cwd;
       debugLog(config.debug, 'changed paths', changes.files);
       debugLog(config.debug, 'included paths', filterPaths(changes.files, config));
       debugLog(
         config.debug,
         'forced spec paths',
         tests
-          .filter((test) => changed.has(resolve(test.location.file)))
+          .filter((test) => changes.files.some((file) => sameFile(file, test.location.file, root)))
           .map((test) => test.location.file)
       );
       debugLog(config.debug, 'model name-status', changes.statuses);

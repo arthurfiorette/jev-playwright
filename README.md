@@ -89,14 +89,14 @@ export default defineConfigWithJev(
 
 Globs match repository-relative **changed paths**, not test titles. Exclusions take precedence. A directly changed spec still runs even if its path is excluded from model context. Source excerpts and diffs are sent to your configured provider, so use the filters before enabling source context for sensitive tests. There is no universal safe extension-based exclusion: Markdown can be rendered application content. If your repository's docs cannot affect E2E behavior, add `exclude: ['**/*.md', '**/*.mdx']` explicitly. Exclusions reduce model context for mixed changes; if every changed path is excluded, the selector currently runs the full suite.
 
-Git uses `--unified=1` and ignores whitespace-only hunks by default. Customize the patch without changing the changed-file inventory:
+Git uses `--unified=1` and ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
 
 ```ts
 export default defineConfigWithJev(
   {
     enabled: true,
     diff: {
-      whitespace: 'all',
+      whitespace: 'none',
       ignoreBlankLines: false,
       contextLines: 1
     }
@@ -105,7 +105,7 @@ export default defineConfigWithJev(
 );
 ```
 
-`whitespace` accepts `'all'`, `'change'`, `'eol'`, or `'none'`. The default `'all'` is Git's `--ignore-all-space` (`-w`). This can hide meaningful changes to CSS, templates, or strings; set it to `'none'` when whitespace affects behavior. Newly added, untracked files are included as text and are not processed by Git's whitespace flags.
+`diff.whitespace` controls **what Git ignores when comparing lines**, not whether whitespace is included in the displayed patch. The default `'all'` uses `--ignore-all-space` (`-w`), so a change consisting only of whitespace can be omitted from the patch. `'change'` uses `-b` (ignores changes in the amount of whitespace), `'eol'` ignores end-of-line whitespace, and `'none'` ignores nothing. The option never changes the changed-file inventory or forced spec selection. Use `'none'` when whitespace can affect behavior, such as CSS, HTML, templates, or literal-sensitive files. Newly added, untracked files are included as text and are not processed by Git's whitespace flags.
 
 Jev currently documents **32k tokens for state plus the longest question**, and **64k for the full request**. The selector batches by these budgets, not a fixed number of tests. Configure different provider limits with `limits: { stateAndQuestionTokens: 32000, requestTokens: 64000, maxRequests: 100 }`. Because the SDK does not expose Jev's tokenizer, sizing uses serialized UTF-8 bytes as a conservative proxy and may split earlier than the model requires. For OpenRouter's documented 32k total context, set `limits.requestTokens` to `32000`.
 
@@ -113,7 +113,9 @@ Jev currently documents **32k tokens for state plus the longest question**, and 
 
 ### Smart diff selection
 
-The model receives a compact **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), patch text, and keyed test descriptions. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title is unavailable, the checked-out commit subject is used instead. Explicit `prTitle` and `prDescription` override these hints. Titles and descriptions are context, not a substitute for code changes.
+The model receives a compact **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), patch text, and keyed test descriptions. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title or description is unavailable, the checked-out commit subject or body fills the missing field. Explicit `prTitle` and `prDescription` override these hints. Empty fields are omitted. Titles and descriptions are context, not a substitute for code changes.
+
+PR/commit descriptions are converted from GitHub-flavored Markdown to plain text with `remark`, `remark-gfm`, and `strip-markdown`, then whitespace is collapsed and the result is capped at 2,000 characters (titles at 200). This removes HTML comments, formatting, fenced code, and tables from **the hint only**; it does not change the git patch. If the description contains important code or tabular context, put that information in the changed files or provide a custom `beforeRequest` hook.
 
 | Change | Context sent to Jev |
 | --- | --- |
@@ -124,7 +126,9 @@ The model receives a compact **string state** with bounded PR/commit title and d
 
 “No tests” is accepted only after **every** required patch chunk has been evaluated consistently. The file inventory is repeated across chunks; a very large inventory can itself force a full run. Caller-provided changes without complete per-file `patches` can be evaluated when their full diff fits, but cannot be split safely when it does not.
 
-For an exact view of what Jev receives, set `debug: true` or run with `JEV_PLAYWRIGHT_DEBUG=true`. The stderr output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state and questions** in each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
+For an exact view of the selection, set `debug: true` or run with `JEV_PLAYWRIGHT_DEBUG=true`. The stderr output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state, questions, and Jev response** for each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
+
+If the log says `Jev scope conflicts with per-test answers`, the batch-level all/none/some choice disagreed with the thresholded per-test probabilities. The reporter runs all tests in this case. Inspect the response in debug output before changing the threshold or question wording.
 
 <br />
 
@@ -151,7 +155,7 @@ export JEV_PLAYWRIGHT_MODEL="jev-1.13"
 export JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS=32000
 ```
 
-The SDK appends `/v1/systemone` to the URL. `jev-1.13` is an OpenRouter-supported model ID; pin a version when tuning a selection threshold. See [OpenRouter's TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
+The SDK appends `/v1/systemone` to the URL. `jev-1.13` is a documented OpenRouter-supported model ID. The SDK default `jev-latest` also works on OpenRouter but can move between releases, so pin the model if you tune `threshold`. OpenRouter documents a 32k total context, which is why the example lowers `limits.requestTokens`; adjust it if your provider has a different budget. See [OpenRouter's TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
 
 ### Custom authentication or transport
 
@@ -305,7 +309,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                              |
 | `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                    |
 | `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                   |
-| `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all`                                   |
+| `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all` (ignore whitespace-only changes); `none` preserves them |
 | `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                    | `false`                                 |
 | `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `1`                                     |
 | `limits.stateAndQuestionTokens`             | `JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS`           | `32000`                                 |

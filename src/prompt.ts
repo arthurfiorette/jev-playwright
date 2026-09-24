@@ -1,16 +1,35 @@
 import type { SystemOneRequest } from '@typesafe-ai/sdk';
 import { choice, noul } from '@typesafe-ai/sdk';
+import { remark } from 'remark';
+import remarkGfm from 'remark-gfm';
+import stripMarkdown from 'strip-markdown';
 import type { ResolvedConfig } from './config.js';
 import type { Changes } from './git.js';
 import type { TestDescriptor } from './selection.js';
 import { limitTestSource } from './source.js';
 
+const plainText = remark().use(remarkGfm).use(stripMarkdown);
+
 function compactLine(value: string): string {
-  return value.replace(/[\r\n\t]+/g, ' ').trim();
+  return value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function hint(value: string | undefined, maxLength: number): string {
-  return compactLine(value ?? '').slice(0, maxLength);
+function titleHint(value: string | undefined): string | undefined {
+  const text = compactLine(value ?? '').slice(0, 200);
+  return text || undefined;
+}
+
+function descriptionHint(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  // Preserve prose inside PR disclosure tags before remark discards raw HTML nodes.
+  const markdown = value
+    .replace(/<\/?(?:details|summary)\b[^>]*>/gi, '\n')
+    .replace(/!\[[^\]]*\]\([^\n)]*\)/g, ' ');
+  const text = compactLine(String(plainText.processSync(markdown))).slice(0, 2_000);
+  return text || undefined;
 }
 
 function changedPaths(changes: Changes): string[] {
@@ -56,11 +75,14 @@ export function createRequest(
       some: 'At least one but not every listed candidate test could be affected.'
     }
   );
+  const title = titleHint(config.prTitle ?? changes.title);
+  const description = descriptionHint(config.prDescription ?? changes.description);
+
   return {
     model: config.model,
     state: [
-      `Title: ${hint(config.prTitle ?? changes.title, 200)}`,
-      `Description: ${hint(config.prDescription ?? changes.description, 2_000)}`,
+      ...(title ? [`Title: ${title}`] : []),
+      ...(description ? [`Description: ${description}`] : []),
       'Changed files (status and path):',
       ...changedPaths(changes),
       ...(changes.diff ? ['Patch:', changes.diff] : []),

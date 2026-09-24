@@ -60,6 +60,10 @@ test('config precedence, glob filtering, and validation', () => {
   assert.deepEqual(filterPaths(['src/a.ts', 'src/generated/b.ts', 'test/a.ts'], config), [
     'src/a.ts'
   ]);
+  assert.deepEqual(
+    filterPaths(['.github/workflows/ci.yml', 'src/.settings/file.ts'], resolveConfig({}, {})),
+    ['.github/workflows/ci.yml', 'src/.settings/file.ts']
+  );
   assert.throws(() => resolveConfig({}, { JEV_PLAYWRIGHT_THRESHOLD: 'nope' }), /must be a number/);
   assert.throws(() => resolveConfig({ limits: { requestTokens: 0 } }), /limits/);
   assert.equal(
@@ -113,6 +117,23 @@ test('a change only to a discovered spec runs that spec without calling Jev', as
   assert.deepEqual(result.selectedIds, ['a']);
   assert.deepEqual(result.assessments, []);
   assert.equal(result.fallbackReason, undefined);
+});
+
+test('forced specs resolve against the git root when Playwright runs in a subdirectory', async () => {
+  const tests = [
+    { id: 'changed', file: '/repo/e2e/checkout.spec.ts', title: 'checkout' },
+    { id: 'other', file: '/repo/e2e/other.spec.ts', title: 'other' }
+  ];
+
+  const selected = await selectTests({
+    tests,
+    changes: { root: '/repo', files: ['e2e/checkout.spec.ts'] },
+    config: { enabled: true, cwd: '/repo/e2e' },
+    env: {}
+  });
+
+  assert.deepEqual(selected.selectedIds, ['changed']);
+  assert.equal(selected.fallbackReason, undefined);
 });
 
 test('excludes low probability tests but fails open for incomplete answers', async () => {
@@ -250,6 +271,44 @@ test('string state keeps compact statuses and bounded human hints', () => {
   assert.match(state, /test_0 \| chromium \| \/repo\/e2e\/a\.spec\.ts \| checkout/);
   assert.match(state, /Patch:\n\+updated payments/);
   assert.ok(state.length < 3_000);
+});
+
+test('empty hints are omitted and generated PR markup is compacted before capping', () => {
+  const config = resolveConfig({}, {});
+  const blank = String(createRequest([tests[0]!], { files: ['src/payments.ts'] }, config).state);
+  assert.doesNotMatch(blank, /^Title:|^Description:/m);
+
+  const marked = String(
+    createRequest(
+      [tests[0]!],
+      {
+        files: ['src/payments.ts'],
+        title: '  Fix   payments  ',
+        description:
+          `<!-- ${'generated '.repeat(500)} -->\n<details><summary>Notes</summary>\n` +
+          `![Screenshot](https://example.com/screenshot.png)\n[Checkout](https://example.com/checkout) now works.`
+      },
+      config
+    ).state
+  );
+  assert.match(marked, /Title: Fix payments/);
+  assert.match(marked, /Description: Notes Checkout now works\./);
+  assert.doesNotMatch(marked, /generated|screenshot\.png|<details>|example\.com/);
+});
+
+test('PR hints handle GitHub-flavored tables and task lists without raw markup', () => {
+  const request = createRequest(
+    [tests[0]!],
+    {
+      files: ['src/payments.ts'],
+      description: '- [x] Checkout covered\n\n| Area | Result |\n| --- | --- |\n| Billing | Done |'
+    },
+    resolveConfig({}, {})
+  );
+
+  const state = String(request.state);
+  assert.match(state, /Checkout covered/);
+  assert.doesNotMatch(state, /\[x\]|\| Area \||\| Billing \|/);
 });
 
 test('source-aware batching uses actual excerpt sizes', async () => {

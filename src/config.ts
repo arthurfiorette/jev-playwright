@@ -15,7 +15,13 @@ export interface JevRequestLimits {
 
 /** Git diff presentation sent to Jev; changed-file detection is unaffected. */
 export interface JevDiffConfig {
-  /** Whitespace comparison mode: all (-w), change (-b), eol, or none. @default 'all' */
+  /**
+   * Whitespace changes Git ignores when creating the model patch.
+   * `none` preserves whitespace changes; `all` ignores them (-w); `change` ignores
+   * changes in whitespace amount (-b); `eol` ignores end-of-line whitespace changes.
+   * Changed-file detection is unaffected.
+   * @default 'all'
+   */
   whitespace?: 'all' | 'change' | 'eol' | 'none';
   /** Omit hunks consisting solely of blank-line changes. @default false */
   ignoreBlankLines?: boolean;
@@ -262,7 +268,7 @@ export function filterPaths(paths: string[], config: ResolvedConfig): string[] {
   return paths.filter((path) => {
     const normalized = path.replaceAll('\\', '/');
     return (
-      config.include.some((glob) => matchesGlob(normalized, glob)) &&
+      config.include.some((glob) => glob === '**/*' || matchesGlob(normalized, glob)) &&
       !config.exclude.some((glob) => matchesGlob(normalized, glob))
     );
   });

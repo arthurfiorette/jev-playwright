@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { resolveConfig } from '../src/config.js';
-import { getCommitTitle, getGitChanges } from '../src/git.js';
+import { getCommitMessage, getGitChanges } from '../src/git.js';
 
 function runGit(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd });
 }
 
-function commit(cwd: string, message: string): void {
+function commit(cwd: string, message: string, body?: string): void {
   runGit(cwd, 'add', '.');
   runGit(
     cwd,
@@ -23,7 +23,8 @@ function commit(cwd: string, message: string): void {
     'commit.gpgSign=false',
     'commit',
     '-qm',
-    message
+    message,
+    ...(body ? ['-m', body] : [])
   );
 }
 
@@ -173,7 +174,7 @@ test('git name-status retains the source and destination of renamed files', asyn
     runGit(cwd, 'add', '-A');
 
     const changes = await getGitChanges(cwd, undefined, resolveConfig({ cwd }, {}));
-    assert.equal(await getCommitTitle(cwd), 'initial');
+    assert.deepEqual(await getCommitMessage(cwd), { title: 'initial' });
     assert.deepEqual(changes.files, ['new.ts']);
     assert.deepEqual(changes.statuses, [
       { status: 'R100', previousPath: 'old.ts', path: 'new.ts' }
@@ -181,5 +182,51 @@ test('git name-status retains the source and destination of renamed files', asyn
     assert.equal(changes.patches?.length, 1);
   } finally {
     await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('git paths and patch pathspecs stay root-relative from a nested Playwright cwd', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-nested-'));
+  const cwd = join(root, 'e2e');
+
+  try {
+    await mkdir(cwd);
+    runGit(root, 'init', '-q');
+    await writeFile(join(root, 'app.ts'), 'export const value = 1;\n');
+    await writeFile(join(cwd, 'checkout.spec.ts'), 'test("checkout", () => {});\n');
+    commit(root, 'initial');
+    const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+
+    await writeFile(join(root, 'app.ts'), 'export const value = 2;\n');
+    await writeFile(join(cwd, 'checkout.spec.ts'), 'test("updated checkout", () => {});\n');
+    const local = await getGitChanges(cwd, undefined, resolveConfig({ cwd }, {}), [
+      join(cwd, 'checkout.spec.ts')
+    ]);
+
+    assert.equal(local.root, await realpath(root));
+    assert.deepEqual(local.files.sort(), ['app.ts', 'e2e/checkout.spec.ts']);
+    assert.deepEqual(
+      local.statuses?.map((entry) => entry.path),
+      ['app.ts']
+    );
+    assert.match(local.diff ?? '', /value = 2/);
+    assert.doesNotMatch(local.diff ?? '', /updated checkout/);
+
+    commit(root, 'change', 'Checkout now uses the updated value.');
+    assert.deepEqual(await getCommitMessage(cwd), {
+      title: 'change',
+      description: 'Checkout now uses the updated value.'
+    });
+    const committed = await getGitChanges(cwd, base, resolveConfig({ cwd }, {}), [
+      join(cwd, 'checkout.spec.ts')
+    ]);
+    assert.deepEqual(committed.files.sort(), local.files);
+    assert.match(committed.diff ?? '', /value = 2/);
+    assert.deepEqual(
+      committed.statuses?.map((entry) => entry.path),
+      ['app.ts']
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

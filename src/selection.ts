@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { TypeSafeClient } from '@typesafe-ai/sdk';
 import type { JevPlaywrightConfig, ResolvedConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
@@ -48,8 +49,18 @@ function allTests(tests: TestDescriptor[], reason: string): Selection {
   return { selectedIds: tests.map((test) => test.id), assessments: [], fallbackReason: reason };
 }
 
-function sameFile(changed: string, file: string, cwd: string): boolean {
-  return resolve(cwd, changed) === resolve(cwd, file);
+/** Match repo-relative git paths to Playwright paths, including symlinked checkouts. */
+export function sameFile(changed: string, file: string, cwd: string): boolean {
+  const path = resolve(cwd, changed);
+  if (path === resolve(cwd, file)) return true;
+  if (basename(path) !== basename(file)) return false;
+
+  // Git resolves symlinked checkouts while Playwright can report their original paths.
+  try {
+    return realpathSync(path) === realpathSync(file);
+  } catch {
+    return false;
+  }
 }
 
 function forcedIds(tests: TestDescriptor[], files: string[], cwd: string): Set<string> {
@@ -101,6 +112,7 @@ async function assessBatch(
   debugLog(config.debug, `request ${counter.requests} state`, prepared.state);
   debugLog(config.debug, `request ${counter.requests} questions`, prepared.questions);
   const response = await client.systemOne(prepared);
+  debugLog(config.debug, `request ${counter.requests} response`, response);
   const scope = response.answers?.scope;
   if (scope?.type !== 'choice' || !['all', 'none', 'some'].includes(scope.choice)) {
     throw new Error('Invalid Jev scope answer');
@@ -277,12 +289,13 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
   if (new Set(input.tests.map((test) => test.id)).size !== input.tests.length)
     throw new Error('Test IDs must be unique');
 
-  const forced = forcedIds(input.tests, input.changes.files, config.cwd);
+  const root = input.changes.root ?? config.cwd;
+  const forced = forcedIds(input.tests, input.changes.files, root);
   const files = filterPaths(input.changes.files, config);
-  const forcedFiles = new Set(
-    input.tests.filter((test) => forced.has(test.id)).map((test) => resolve(config.cwd, test.file))
+  const changedSpecs = input.tests.filter((test) => forced.has(test.id));
+  const modelFiles = files.filter(
+    (file) => !changedSpecs.some((test) => sameFile(file, test.file, root))
   );
-  const modelFiles = files.filter((file) => !forcedFiles.has(resolve(config.cwd, file)));
   debugLog(config.debug, 'model paths', modelFiles);
   if (!modelFiles.length) {
     return forced.size
