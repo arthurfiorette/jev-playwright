@@ -109,7 +109,7 @@ export default defineConfigWithJev(
 
 `diff.whitespace` controls **what Git ignores when comparing lines**, not whether whitespace is included in the displayed patch. The default `'all'` uses `--ignore-all-space` (`-w`), so a change consisting only of whitespace can be omitted from the patch. `'change'` uses `-b` (ignores changes in the amount of whitespace), `'eol'` ignores end-of-line whitespace, and `'none'` ignores nothing. The option never changes the changed-file inventory or forced spec selection. Use `'none'` when whitespace can affect behavior, such as CSS, HTML, templates, or literal-sensitive files. Newly added, untracked files are included as text and are not processed by Git's whitespace flags.
 
-Jev currently documents **32k tokens for state plus the longest question**, and **64k for the full request**. The selector batches by these budgets, not a fixed number of tests. Configure different provider limits with `limits: { stateAndQuestionTokens: 32000, requestTokens: 64000, maxRequests: 100 }`. Because the SDK does not expose Jev's tokenizer, sizing uses serialized UTF-8 bytes as a conservative proxy and may split earlier than the model requires. For OpenRouter's documented 32k total context, set `limits.requestTokens` to `32000`.
+Jev currently documents **32k tokens for state plus the longest question**, and **64k for the full request**. The selector batches by these budgets, not a fixed number of tests. Independent batches, including diff chunks, run with at most **five in-flight Jev calls** by default; set `limits.maxConcurrentRequests` to tune this for your provider. The complete request plan must fit within `limits.maxRequests` (default `100`) before any calls begin. If one batch fails, already-started calls settle and the full suite runs. `beforeRequest` hooks may run concurrently, so avoid sharing mutable state between them. Because the SDK does not expose Jev's tokenizer, sizing uses serialized UTF-8 bytes as a conservative proxy and may split earlier than the model requires. For OpenRouter's documented 32k total context, set `limits.requestTokens` to `32000`.
 
 **All, none, or some** are derived from those per-test probabilities; Jev is not asked a second, potentially contradictory scope question. When no test meets the threshold across every evaluated batch, the reporter marks discovered tests as skipped and Playwright exits successfully if nothing else fails. Directly changed specs still run. An unavailable git ref, missing credentials, oversized change, or invalid/incomplete per-test answer instead runs the **full discovered suite**. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>` to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before relying on reduced CI runs.
 
@@ -128,7 +128,7 @@ PR/commit descriptions are converted from GitHub-flavored Markdown to plain text
 
 “No tests” is accepted only after **every** required patch chunk has been evaluated consistently. The file inventory is repeated across chunks; a very large inventory can itself force a full run. Caller-provided changes without complete per-file `patches` can be evaluated when their full diff fits, but cannot be split safely when it does not.
 
-For an exact view of the selection, set `debug: true` or run with `JEV_PLAYWRIGHT_DEBUG=true`. The stderr output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state, questions, and Jev response** for each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
+For an exact view of the selection, run with `DEBUG=jev-playwright:*`. The `debug` package writes diagnostics under the `jev-playwright:reporter` and `jev-playwright:selection` namespaces, so you can enable either namespace individually. Output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state, questions, and Jev response** for each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
 
 <br />
 
@@ -302,7 +302,6 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | Option                                      | Environment variable                                         | Default                                 |
 | ------------------------------------------- | ------------------------------------------------------------ | --------------------------------------- |
 | `enabled`                                   | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`)         | `false`                                 |
-| `debug`                                     | `JEV_PLAYWRIGHT_DEBUG`                                      | `false`                                 |
 | `baseRef`                                   | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF`                   | CI baseline or local changes            |
 | `defaultBranch`                             | `JEV_PLAYWRIGHT_DEFAULT_BRANCH`                              | provider value, then `main`             |
 | `cwd`                                       | `JEV_PLAYWRIGHT_CWD`                                         | `process.cwd()`                         |
@@ -315,6 +314,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `limits.stateAndQuestionTokens`             | `JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS`           | `32000`                                 |
 | `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                      | `64000`                                 |
 | `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                        | `100`                                   |
+| `limits.maxConcurrentRequests`              | `JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS`             | `5`                                     |
 | `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                 |
 | `perProject`                                | `JEV_PLAYWRIGHT_PER_PROJECT`                                 | `false` (share decisions across projects) |
 | `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                 |

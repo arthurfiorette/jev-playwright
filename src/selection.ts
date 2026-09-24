@@ -1,9 +1,10 @@
 import { realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { TypeSafeClient } from '@typesafe-ai/sdk';
+import { runBatches } from './batch.js';
 import type { JevPlaywrightConfig, ResolvedConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
-import { debugLog } from './debug.js';
+import { selectionDebug } from './debug.js';
 import type { Changes } from './git.js';
 import { createRequest } from './prompt.js';
 import { fitsRequestLimits } from './request-limits.js';
@@ -137,93 +138,6 @@ function sdkClient(
   );
 }
 
-async function assessBatch(
-  tests: TestDescriptor[],
-  changes: Changes,
-  config: ResolvedConfig,
-  client: Pick<TypeSafeClient, 'systemOne'>,
-  counter: { requests: number }
-): Promise<Assessment[]> {
-  const request = createRequest(tests, changes, config);
-  const prepared = config.beforeRequest
-    ? await config.beforeRequest(request, { changes, tests })
-    : request;
-  if (
-    !prepared?.questions ||
-    tests.some((_, index) => prepared.questions[`test_${index}`]?.type !== 'noul')
-  ) {
-    throw new Error('beforeRequest must retain each typed relevance question');
-  }
-  if (!fitsRequestLimits(prepared, config.limits)) {
-    throw new Error('Jev request exceeds configured limits after beforeRequest');
-  }
-
-  if (++counter.requests > config.limits.maxRequests) {
-    throw new Error('Jev request count exceeds configured limits');
-  }
-  debugLog(config.debug, `request ${counter.requests} state`, prepared.state);
-  debugLog(config.debug, `request ${counter.requests} questions`, prepared.questions);
-  const response = await client.systemOne(prepared);
-  debugLog(config.debug, `request ${counter.requests} response`, response);
-
-  const assessments: Assessment[] = [];
-  for (const [index, test] of tests.entries()) {
-    const answer = response.answers?.[`test_${index}`];
-    if (
-      answer?.type !== 'noul' ||
-      !Number.isFinite(answer.noul) ||
-      answer.noul < 0 ||
-      answer.noul > 1
-    ) {
-      throw new Error(`Invalid Jev answer for ${test.id}`);
-    }
-    assessments.push({ id: test.id, probability: answer.noul, model: response.model });
-  }
-
-  return assessments;
-}
-
-function nextCandidateBatch(
-  candidates: TestDescriptor[],
-  start: number,
-  changes: Changes,
-  config: ResolvedConfig
-): TestDescriptor[] {
-  const batch: TestDescriptor[] = [];
-
-  for (let index = start; index < candidates.length; index++) {
-    const candidate = candidates[index];
-    if (!candidate) break;
-
-    const proposed = [...batch, candidate];
-    if (!fitsRequestLimits(createRequest(proposed, changes, config), config.limits)) {
-      if (!batch.length) throw new Error('Jev state or a single test exceeds configured limits');
-      break;
-    }
-
-    batch.push(candidate);
-  }
-
-  return batch;
-}
-
-async function assessCandidates(
-  candidates: TestDescriptor[],
-  changes: Changes,
-  config: ResolvedConfig,
-  client: Pick<TypeSafeClient, 'systemOne'>,
-  counter: { requests: number }
-): Promise<Assessment[]> {
-  const assessments: Assessment[] = [];
-
-  for (let offset = 0; offset < candidates.length; ) {
-    const batch = nextCandidateBatch(candidates, offset, changes, config);
-    assessments.push(...(await assessBatch(batch, changes, config, client, counter)));
-    offset += batch.length;
-  }
-  return assessments;
-}
-
 function chunkChanges(
   changes: Changes,
   candidate: TestDescriptor,
@@ -274,25 +188,20 @@ async function assessEveryChange(
   const contexts = fitsRequestLimits(createRequest([first], changes, config), config.limits)
     ? [changes]
     : chunkChanges(changes, first, config);
-  debugLog(
-    config.debug,
-    'diff chunks',
+  selectionDebug(
+    'diff chunks %O',
     contexts.map((context, index) => ({
       index: index + 1,
       total: contexts.length,
       patchBytes: Buffer.byteLength(context.diff ?? '', 'utf8')
     }))
   );
-  const counter = { requests: 0 };
   const byId = new Map<string, Assessment>();
 
-  for (const context of contexts) {
-    const assessments = await assessCandidates(candidates, context, config, client, counter);
-    for (const assessment of assessments) {
-      const previous = byId.get(assessment.id);
-      if (!previous || assessment.probability > previous.probability) {
-        byId.set(assessment.id, assessment);
-      }
+  for (const assessment of await runBatches(contexts, candidates, config, client)) {
+    const previous = byId.get(assessment.id);
+    if (!previous || assessment.probability > previous.probability) {
+      byId.set(assessment.id, assessment);
     }
   }
 
@@ -333,7 +242,7 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
   const modelFiles = files.filter(
     (file) => !changedSpecs.some((test) => sameFile(file, test.file, root))
   );
-  debugLog(config.debug, 'model paths', modelFiles);
+  selectionDebug('model paths %O', modelFiles);
   if (!modelFiles.length) {
     return forced.size
       ? {
@@ -349,7 +258,7 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
     return { selectedIds: input.tests.map((test) => test.id), assessments: [] };
   try {
     const groups = groupCandidates(candidates, config);
-    debugLog(config.debug, 'candidate groups', {
+    selectionDebug('candidate groups %O', {
       discovered: candidates.length,
       questions: groups.length,
       perProject: config.perProject

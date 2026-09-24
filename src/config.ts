@@ -11,6 +11,8 @@ export interface JevRequestLimits {
   requestTokens?: number;
   /** Maximum calls across all diff chunks before running the full suite. @default 100 */
   maxRequests?: number;
+  /** Maximum in-flight Jev calls across candidate batches and diff chunks. @default 5 */
+  maxConcurrentRequests?: number;
 }
 
 /** Git diff presentation sent to Jev; changed-file detection is unaffected. */
@@ -33,8 +35,6 @@ export interface JevDiffConfig {
 export interface JevPlaywrightConfig {
   /** Selection is opt-in; ordinary Playwright runs do not contact Jev. @default false */
   enabled?: boolean;
-  /** Print changed paths and complete Jev requests to stderr. @default false */
-  debug?: boolean;
   /** Git revision compared to HEAD via merge-base; also reads BASE_REF. @default undefined (local changes) */
   baseRef?: string;
   /** Default branch name for CI detection, when the provider cannot supply one. @default 'main' */
@@ -174,7 +174,9 @@ function validateConfig(config: ResolvedConfig): ResolvedConfig {
     !Number.isSafeInteger(config.limits.requestTokens) ||
     config.limits.requestTokens < 1 ||
     !Number.isSafeInteger(config.limits.maxRequests) ||
-    config.limits.maxRequests < 1
+    config.limits.maxRequests < 1 ||
+    !Number.isSafeInteger(config.limits.maxConcurrentRequests) ||
+    config.limits.maxConcurrentRequests < 1
   ) {
     throw new Error('limits must be positive integer token budgets');
   }
@@ -199,7 +201,6 @@ export function resolveConfig(
   return validateConfig({
     enabled:
       parseBoolean(readEnv(env, 'ENABLED'), 'JEV_PLAYWRIGHT_ENABLED') ?? config.enabled ?? false,
-    debug: parseBoolean(readEnv(env, 'DEBUG'), 'JEV_PLAYWRIGHT_DEBUG') ?? config.debug ?? false,
     baseRef: readEnv(env, 'BASE_REF') ?? env.BASE_REF ?? config.baseRef,
     defaultBranch: readEnv(env, 'DEFAULT_BRANCH') ?? config.defaultBranch,
     cwd: readEnv(env, 'CWD') ?? config.cwd ?? process.cwd(),
@@ -241,7 +242,14 @@ export function resolveConfig(
       maxRequests:
         parseNumber(readEnv(env, 'LIMITS_MAX_REQUESTS'), 'JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS') ??
         config.limits?.maxRequests ??
-        100
+        100,
+      maxConcurrentRequests:
+        parseNumber(
+          readEnv(env, 'LIMITS_MAX_CONCURRENT_REQUESTS'),
+          'JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS'
+        ) ??
+        config.limits?.maxConcurrentRequests ??
+        5
     },
     includeTestSource:
       parseBoolean(readEnv(env, 'INCLUDE_TEST_SOURCE'), 'JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE') ??

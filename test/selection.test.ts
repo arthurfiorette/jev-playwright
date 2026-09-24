@@ -40,6 +40,20 @@ test('config precedence, glob filtering, and validation', () => {
   assert.equal(config.baseRef, 'main');
   assert.equal(config.threshold, 0.4);
   assert.equal(config.perProject, false);
+  assert.equal(config.limits.maxConcurrentRequests, 5);
+  assert.equal(
+    resolveConfig(
+      { limits: { maxConcurrentRequests: 1 } },
+      {
+        JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS: '3'
+      }
+    ).limits.maxConcurrentRequests,
+    3
+  );
+  assert.throws(
+    () => resolveConfig({ limits: { maxConcurrentRequests: 0 } }, {}),
+    /limits must be positive/
+  );
   assert.equal(
     resolveConfig({ perProject: false }, { JEV_PLAYWRIGHT_PER_PROJECT: 'true' }).perProject,
     true
@@ -457,6 +471,91 @@ test('configurable limits split candidate requests, but do not drop an oversized
   assert.deepEqual(oversized.selectedIds, ['a', 'b', 'c']);
   assert.match(oversized.fallbackReason ?? '', /no complete per-file patches/);
   assert.deepEqual(calls, [1, 1, 1]);
+});
+
+test('independent request batches run concurrently within the configured limit', async () => {
+  const changes = { files: ['src/feature.ts'] };
+  const resolved = resolveConfig({ cwd: '/repo' }, {});
+  const single = Buffer.byteLength(
+    JSON.stringify(createRequest(tests.slice(0, 1), changes, resolved))
+  );
+  const pair = Buffer.byteLength(
+    JSON.stringify(createRequest(tests.slice(0, 2), changes, resolved))
+  );
+  const requestTokens = Math.floor((single + pair) / 2);
+  const gate = Promise.withResolvers<void>();
+  let inFlight = 0;
+  let peak = 0;
+  let started = 0;
+  const mock: Pick<TypeSafeClient, 'systemOne'> = {
+    systemOne: (async ({ questions }: { questions: Record<string, unknown> }) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      if (++started === 2) gate.resolve();
+      await Promise.race([gate.promise, new Promise<void>((resolve) => setTimeout(resolve, 100))]);
+      inFlight--;
+      return {
+        model: 'mock',
+        answers: Object.fromEntries(
+          Object.keys(questions).map((key) => [key, { type: 'noul', noul: 0.9 }])
+        )
+      };
+    }) as unknown as TypeSafeClient['systemOne']
+  };
+
+  const selected = await selectTests({
+    tests,
+    changes,
+    env: {},
+    client: mock,
+    config: { enabled: true, cwd: '/repo', limits: { requestTokens, maxConcurrentRequests: 2 } }
+  });
+
+  assert.equal(started, 3);
+  assert.equal(peak, 2);
+  assert.deepEqual(selected.selectedIds, ['a', 'b', 'c']);
+  assert.equal(selected.fallbackReason, undefined);
+});
+
+test('one failed concurrent batch stops scheduling and falls back after in-flight calls settle', async () => {
+  const changes = { files: ['src/feature.ts'] };
+  const resolved = resolveConfig({ cwd: '/repo' }, {});
+  const single = Buffer.byteLength(
+    JSON.stringify(createRequest(tests.slice(0, 1), changes, resolved))
+  );
+  const pair = Buffer.byteLength(
+    JSON.stringify(createRequest(tests.slice(0, 2), changes, resolved))
+  );
+  const requestTokens = Math.floor((single + pair) / 2);
+  let started = 0;
+  let settled = 0;
+  const mock: Pick<TypeSafeClient, 'systemOne'> = {
+    systemOne: (async ({ questions }: { questions: Record<string, unknown> }) => {
+      const number = ++started;
+      if (number === 1) throw new Error('provider unavailable');
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      settled++;
+      return {
+        model: 'mock',
+        answers: Object.fromEntries(
+          Object.keys(questions).map((key) => [key, { type: 'noul', noul: 0.9 }])
+        )
+      };
+    }) as unknown as TypeSafeClient['systemOne']
+  };
+
+  const selected = await selectTests({
+    tests,
+    changes,
+    env: {},
+    client: mock,
+    config: { enabled: true, cwd: '/repo', limits: { requestTokens, maxConcurrentRequests: 2 } }
+  });
+
+  assert.equal(started, 2);
+  assert.equal(settled, 1);
+  assert.deepEqual(selected.selectedIds, ['a', 'b', 'c']);
+  assert.match(selected.fallbackReason ?? '', /provider unavailable/);
 });
 
 test('oversized patches are evaluated in chunks and their selected tests are united', async () => {

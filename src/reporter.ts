@@ -2,7 +2,7 @@ import type { Reporter, TestCase } from '@playwright/test/reporter';
 import { detectCiDiff } from './ci.js';
 import type { JevPlaywrightConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
-import { debugLog } from './debug.js';
+import { reporterDebug } from './debug.js';
 import { getCommitMessage, getGitChanges } from './git.js';
 import { sameFile, selectTests } from './selection.js';
 import { withTestSource } from './source.js';
@@ -37,7 +37,7 @@ export class JevReporter implements Reporter {
       if (!tests.length) return;
 
       const ciDiff = await detectCiDiff(config);
-      debugLog(config.debug, 'git baseline', ciDiff);
+      reporterDebug('git baseline %O', ciDiff);
       if (ciDiff.kind === 'unavailable') {
         process.stderr.write(
           `[jev-playwright] Running all tests: ${ciDiff.provider}: ${ciDiff.reason}\n`
@@ -60,16 +60,15 @@ export class JevReporter implements Reporter {
         if (description) changes.description = description;
       }
       const root = changes.root ?? config.cwd;
-      debugLog(config.debug, 'changed paths', changes.files);
-      debugLog(config.debug, 'included paths', filterPaths(changes.files, config));
-      debugLog(
-        config.debug,
-        'forced spec paths',
+      reporterDebug('changed paths %O', changes.files);
+      reporterDebug('included paths %O', filterPaths(changes.files, config));
+      reporterDebug(
+        'forced spec paths %O',
         tests
           .filter((test) => changes.files.some((file) => sameFile(file, test.location.file, root)))
           .map((test) => test.location.file)
       );
-      debugLog(config.debug, 'model name-status', changes.statuses);
+      reporterDebug('model name-status %O', changes.statuses);
       const catalog = tests.map((test) => ({
         id: test.id,
         file: test.location.file,
@@ -78,7 +77,7 @@ export class JevReporter implements Reporter {
         title: test.titlePath().slice(3).join('›') || test.title,
         project: test.parent.project()?.name ?? ''
       }));
-      debugLog(config.debug, 'test source', {
+      reporterDebug('test source %O', {
         included: config.includeTestSource,
         ...(config.includeTestSource ? { maxLexicalTokensPerTest: config.maxTestSourceTokens } : {})
       });

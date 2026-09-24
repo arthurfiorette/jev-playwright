@@ -83,7 +83,7 @@ test('reporter can exclude every test after a complete empty Jev decision', asyn
         env: {
           ...localGitEnv(),
           JEV_PLAYWRIGHT_ENABLED: 'true',
-          JEV_PLAYWRIGHT_DEBUG: 'true',
+          DEBUG: 'jev-playwright:*',
           JEV_PLAYWRIGHT_INCLUDE: JSON.stringify([change]),
           JEV_PLAYWRIGHT_PROVIDER_KEY: '',
           TYPESAFE_API_KEY: ''
@@ -96,12 +96,12 @@ test('reporter can exclude every test after a complete empty Jev decision', asyn
       run.stderr,
       /Selected 0\/2 tests \(complete Jev decision: no relevant tests; skipped\)/
     );
-    assert.match(run.stderr, /\[jev-playwright:debug\] changed paths/);
-    assert.match(run.stderr, /\[jev-playwright:debug\] test source\n\{\n {2}"included": false/);
-    assert.match(run.stderr, /\[jev-playwright:debug\] request 1 state/);
-    assert.match(run.stderr, /\[jev-playwright:debug\] request 1 questions/);
+    assert.match(run.stderr, /jev-playwright:reporter changed paths/);
+    assert.match(run.stderr, /jev-playwright:reporter test source .*included: false/s);
+    assert.match(run.stderr, /jev-playwright:selection request 1 state/);
+    assert.match(run.stderr, /jev-playwright:selection request 1 questions/);
     assert.match(run.stderr, /Test:test_0\|test\/fixtures\/smoke\.spec\.ts:3:1\|first fixture/);
-    assert.match(run.stderr, /\[jev-playwright:debug\] request 1 response/);
+    assert.match(run.stderr, /jev-playwright:selection request 1 response/);
     assert.match(run.stdout, /2 skipped/);
     assert.doesNotMatch(run.stdout, /2 passed/);
   } finally {

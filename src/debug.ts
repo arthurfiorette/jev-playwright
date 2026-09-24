@@ -1,6 +1,5 @@
-/** Print model context only when explicitly enabled; it can contain code and PR text. */
-export function debugLog(enabled: boolean, label: string, value: unknown): void {
-  if (!enabled) return;
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  process.stderr.write(`[jev-playwright:debug] ${label}\n${text}\n`);
-}
+import createDebug from 'debug';
+
+// Separate namespaces allow callers to enable reporter or selection diagnostics independently.
+export const reporterDebug = createDebug('jev-playwright:reporter');
+export const selectionDebug = createDebug('jev-playwright:selection');
