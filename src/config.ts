@@ -3,10 +3,32 @@ import type { SystemOneRequest, TypeSafeClient } from '@typesafe-ai/sdk';
 import type { Changes } from './git.js';
 import type { TestDescriptor } from './selection.js';
 
+/** Jev context budgets used for conservative request sizing. */
+export interface JevRequestLimits {
+  /** State plus the longest question, in model tokens. @default 32000 */
+  stateAndQuestionTokens?: number;
+  /** State plus every question, in model tokens. @default 64000 */
+  requestTokens?: number;
+  /** Maximum calls across all diff chunks before running the full suite. @default 100 */
+  maxRequests?: number;
+}
+
+/** Git diff presentation sent to Jev; changed-file detection is unaffected. */
+export interface JevDiffConfig {
+  /** Whitespace comparison mode: all (-w), change (-b), eol, or none. @default 'all' */
+  whitespace?: 'all' | 'change' | 'eol' | 'none';
+  /** Omit hunks consisting solely of blank-line changes. @default false */
+  ignoreBlankLines?: boolean;
+  /** Unchanged lines shown around each hunk. @default 1 */
+  contextLines?: number;
+}
+
 /** Options shared by the reporter and programmatic selector. Paths are relative to cwd. */
 export interface JevPlaywrightConfig {
   /** Selection is opt-in; ordinary Playwright runs do not contact Jev. @default false */
   enabled?: boolean;
+  /** Print changed paths and complete Jev requests to stderr. @default false */
+  debug?: boolean;
   /** Git revision compared to HEAD via merge-base; also reads BASE_REF. @default undefined (local changes) */
   baseRef?: string;
   /** Default branch name for CI detection, when the provider cannot supply one. @default 'main' */
@@ -17,10 +39,12 @@ export interface JevPlaywrightConfig {
   include?: string[];
   /** Changed paths excluded from context; exclusions take precedence. @default [] */
   exclude?: string[];
+  /** How git formats the patch sent to Jev. @default { whitespace: 'all', ignoreBlankLines: false, contextLines: 1 } */
+  diff?: JevDiffConfig;
   /** Select tests at or above this yes probability. @default 0.5 */
   threshold?: number;
-  /** Maximum tests per Jev request. @default 50 */
-  batchSize?: number;
+  /** Model input budgets; change these when using a provider with different limits. @default TypeSafe Jev limits */
+  limits?: JevRequestLimits;
   /** Include a bounded source excerpt starting at each test declaration. @default false */
   includeTestSource?: boolean;
   /** Maximum JavaScript lexical tokens per test when enabled. @default 5000 */
@@ -57,6 +81,8 @@ export interface ResolvedConfig
       | 'prDescription'
       | 'providerUrl'
       | 'providerKey'
+      | 'limits'
+      | 'diff'
       | 'client'
       | 'createQuestion'
       | 'beforeRequest'
@@ -68,6 +94,8 @@ export interface ResolvedConfig
   prDescription: string | undefined;
   providerUrl: string | undefined;
   providerKey: string | undefined;
+  limits: Required<JevRequestLimits>;
+  diff: Required<JevDiffConfig>;
   client: JevPlaywrightConfig['client'];
   createQuestion: JevPlaywrightConfig['createQuestion'];
   beforeRequest: JevPlaywrightConfig['beforeRequest'];
@@ -91,6 +119,13 @@ function parseNumber(raw: string | undefined, key: string): number | undefined {
   return Number(raw);
 }
 
+function parseWhitespace(raw: string | undefined): JevDiffConfig['whitespace'] {
+  if (raw === undefined || raw === 'all' || raw === 'change' || raw === 'eol' || raw === 'none') {
+    return raw;
+  }
+  throw new Error('JEV_PLAYWRIGHT_DIFF_WHITESPACE must be all, change, eol, or none');
+}
+
 function parseGlobs(raw: string | undefined, key: string): string[] | undefined {
   if (raw === undefined) return undefined;
   let value: unknown;
@@ -109,11 +144,31 @@ function parseGlobs(raw: string | undefined, key: string): string[] | undefined 
 }
 
 function validateConfig(config: ResolvedConfig): ResolvedConfig {
+  if (!['all', 'change', 'eol', 'none'].includes(config.diff.whitespace)) {
+    throw new Error('diff.whitespace must be all, change, eol, or none');
+  }
+  if (typeof config.diff.ignoreBlankLines !== 'boolean') {
+    throw new Error('diff.ignoreBlankLines must be a boolean');
+  }
+  if (
+    !Number.isInteger(config.diff.contextLines) ||
+    config.diff.contextLines < 0 ||
+    config.diff.contextLines > 20
+  ) {
+    throw new Error('diff.contextLines must be an integer from 0 to 20');
+  }
   if (config.threshold < 0 || config.threshold > 1 || !Number.isFinite(config.threshold)) {
     throw new Error('threshold must be between 0 and 1');
   }
-  if (!Number.isInteger(config.batchSize) || config.batchSize < 1 || config.batchSize > 200) {
-    throw new Error('batchSize must be an integer from 1 to 200');
+  if (
+    !Number.isSafeInteger(config.limits.stateAndQuestionTokens) ||
+    config.limits.stateAndQuestionTokens < 1 ||
+    !Number.isSafeInteger(config.limits.requestTokens) ||
+    config.limits.requestTokens < 1 ||
+    !Number.isSafeInteger(config.limits.maxRequests) ||
+    config.limits.maxRequests < 1
+  ) {
+    throw new Error('limits must be positive integer token budgets');
   }
   if (
     !Number.isInteger(config.maxTestSourceTokens) ||
@@ -136,18 +191,50 @@ export function resolveConfig(
   return validateConfig({
     enabled:
       parseBoolean(readEnv(env, 'ENABLED'), 'JEV_PLAYWRIGHT_ENABLED') ?? config.enabled ?? false,
+    debug: parseBoolean(readEnv(env, 'DEBUG'), 'JEV_PLAYWRIGHT_DEBUG') ?? config.debug ?? false,
     baseRef: readEnv(env, 'BASE_REF') ?? env.BASE_REF ?? config.baseRef,
     defaultBranch: readEnv(env, 'DEFAULT_BRANCH') ?? config.defaultBranch,
     cwd: readEnv(env, 'CWD') ?? config.cwd ?? process.cwd(),
     include: parseGlobs(readEnv(env, 'INCLUDE'), 'JEV_PLAYWRIGHT_INCLUDE') ??
       config.include ?? ['**/*'],
     exclude: parseGlobs(readEnv(env, 'EXCLUDE'), 'JEV_PLAYWRIGHT_EXCLUDE') ?? config.exclude ?? [],
+    diff: {
+      whitespace:
+        parseWhitespace(readEnv(env, 'DIFF_WHITESPACE')) ?? config.diff?.whitespace ?? 'all',
+      ignoreBlankLines:
+        parseBoolean(
+          readEnv(env, 'DIFF_IGNORE_BLANK_LINES'),
+          'JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES'
+        ) ??
+        config.diff?.ignoreBlankLines ??
+        false,
+      contextLines:
+        parseNumber(readEnv(env, 'DIFF_CONTEXT_LINES'), 'JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES') ??
+        config.diff?.contextLines ??
+        1
+    },
     threshold:
       parseNumber(readEnv(env, 'THRESHOLD'), 'JEV_PLAYWRIGHT_THRESHOLD') ?? config.threshold ?? 0.5,
-    batchSize:
-      parseNumber(readEnv(env, 'BATCH_SIZE'), 'JEV_PLAYWRIGHT_BATCH_SIZE') ??
-      config.batchSize ??
-      50,
+    limits: {
+      stateAndQuestionTokens:
+        parseNumber(
+          readEnv(env, 'LIMITS_STATE_AND_QUESTION_TOKENS'),
+          'JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS'
+        ) ??
+        config.limits?.stateAndQuestionTokens ??
+        32_000,
+      requestTokens:
+        parseNumber(
+          readEnv(env, 'LIMITS_REQUEST_TOKENS'),
+          'JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS'
+        ) ??
+        config.limits?.requestTokens ??
+        64_000,
+      maxRequests:
+        parseNumber(readEnv(env, 'LIMITS_MAX_REQUESTS'), 'JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS') ??
+        config.limits?.maxRequests ??
+        100
+    },
     includeTestSource:
       parseBoolean(readEnv(env, 'INCLUDE_TEST_SOURCE'), 'JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE') ??
       config.includeTestSource ??

@@ -20,7 +20,7 @@
 
 Package-aware tools such as Turborepo and Nx can scope unit tests using the changed-package graph. E2E tests are harder: a single browser journey can cross many packages, pages, and services. `jev-playwright` compares the change with Playwright's discovered tests to select relevant journeys **before browser execution**, reducing test runtime in large CI suites. It does not eliminate the time spent provisioning the E2E stack.
 
-Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started) · [Choose a provider](#choose-a-jev-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
+Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started) · [Smart diff selection](#smart-diff-selection) · [Choose a provider](#choose-a-jev-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
 
 <br />
 
@@ -69,8 +69,8 @@ Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started
 Playwright discovers tests first, applying its usual project, grep, and `.only` filters. The reporter then:
 
 1. Reads the git change set. Locally, this includes staged, unstaged, and untracked files. In CI, it [detects a baseline](#use-it-in-ci).
-2. Keeps tests from directly changed spec files. Sends a bounded diff, changed paths, and each remaining test's file, title, and project to Jev.
-3. Asks one typed yes/no relevance question per test. It selects tests whose probability meets `threshold` (default `0.5`), then Playwright applies sharding and executes them.
+2. Always runs directly changed specs. It omits those specs from Jev's candidate tests and git patch context. Other changed files, including shared E2E fixtures, remain in context.
+3. Packs as many candidates as fit into each Jev request. One Choice question judges whether **all, none, or some tests in that batch** are relevant; independent yes/no questions score each test in the same request. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
 
 Set `includeTestSource: true` to also send an excerpt from each test declaration through the next discovered test (or the end of the file). This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. The excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
 
@@ -87,9 +87,44 @@ export default defineConfigWithJev(
 );
 ```
 
-Globs match repository-relative **changed paths**, not test titles. Exclusions take precedence. A directly changed spec still runs even if its path is excluded from model context. Source excerpts and diffs are sent to your configured provider, so use the filters before enabling source context for sensitive tests.
+Globs match repository-relative **changed paths**, not test titles. Exclusions take precedence. A directly changed spec still runs even if its path is excluded from model context. Source excerpts and diffs are sent to your configured provider, so use the filters before enabling source context for sensitive tests. There is no universal safe extension-based exclusion: Markdown can be rendered application content. If your repository's docs cannot affect E2E behavior, add `exclude: ['**/*.md', '**/*.mdx']` explicitly. Exclusions reduce model context for mixed changes; if every changed path is excluded, the selector currently runs the full suite.
 
-**Failure behavior:** An unavailable git ref, missing credentials, invalid or incomplete Jev answers, oversized diff, or an empty selection results in the **full discovered suite** running. The reporter prints the reason to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before making reduced CI runs a required check.
+Git uses `--unified=1` and ignores whitespace-only hunks by default. Customize the patch without changing the changed-file inventory:
+
+```ts
+export default defineConfigWithJev(
+  {
+    enabled: true,
+    diff: {
+      whitespace: 'all',
+      ignoreBlankLines: false,
+      contextLines: 1
+    }
+  },
+  { reporter: 'list' }
+);
+```
+
+`whitespace` accepts `'all'`, `'change'`, `'eol'`, or `'none'`. The default `'all'` is Git's `--ignore-all-space` (`-w`). This can hide meaningful changes to CSS, templates, or strings; set it to `'none'` when whitespace affects behavior. Newly added, untracked files are included as text and are not processed by Git's whitespace flags.
+
+Jev currently documents **32k tokens for state plus the longest question**, and **64k for the full request**. The selector batches by these budgets, not a fixed number of tests. Configure different provider limits with `limits: { stateAndQuestionTokens: 32000, requestTokens: 64000, maxRequests: 100 }`. Because the SDK does not expose Jev's tokenizer, sizing uses serialized UTF-8 bytes as a conservative proxy and may split earlier than the model requires. For OpenRouter's documented 32k total context, set `limits.requestTokens` to `32000`.
+
+**All, none, or some:** When Jev consistently chooses `none` for every batch, the reporter marks the discovered tests as skipped and Playwright exits successfully if nothing else fails. `all` keeps every candidate; `some` uses the per-test probabilities. Directly changed specs still run. An unavailable git ref, missing credentials, oversized change, invalid answer, or contradictory batch decision instead runs the **full discovered suite**. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>` to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before relying on reduced CI runs.
+
+### Smart diff selection
+
+The model receives a compact **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), patch text, and keyed test descriptions. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title is unavailable, the checked-out commit subject is used instead. Explicit `prTitle` and `prDescription` override these hints. Titles and descriptions are context, not a substitute for code changes.
+
+| Change | Context sent to Jev |
+| --- | --- |
+| Patch fits | Complete name-status inventory and patch; tests are split into requests only when necessary. |
+| Patch exceeds the request budget | Complete name-status inventory and **every per-file patch**, grouped into chunks. Test probabilities are combined by taking the highest relevance per test across chunks. |
+| Only discovered specs changed | No Jev call; those specs run directly. |
+| A patch cannot fit even alone, a chunk fails, or `limits.maxRequests` is reached | Full discovered suite runs. Nothing is silently truncated after the configured git filters. |
+
+“No tests” is accepted only after **every** required patch chunk has been evaluated consistently. The file inventory is repeated across chunks; a very large inventory can itself force a full run. Caller-provided changes without complete per-file `patches` can be evaluated when their full diff fits, but cannot be split safely when it does not.
+
+For an exact view of what Jev receives, set `debug: true` or run with `JEV_PLAYWRIGHT_DEBUG=true`. The stderr output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state and questions** in each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
 
 <br />
 
@@ -113,6 +148,7 @@ Point the same TypeSafe SDK at OpenRouter's System One endpoint:
 export JEV_PLAYWRIGHT_PROVIDER_URL="https://openrouter.ai/api"
 export JEV_PLAYWRIGHT_PROVIDER_KEY="your-openrouter-key"
 export JEV_PLAYWRIGHT_MODEL="jev-1.13"
+export JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS=32000
 ```
 
 The SDK appends `/v1/systemone` to the URL. `jev-1.13` is an OpenRouter-supported model ID; pin a version when tuning a selection threshold. See [OpenRouter's TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
@@ -212,7 +248,7 @@ export default defineConfigWithJev(
 );
 ```
 
-`beforeRequest` may be async. Keep every `test_N` question as a Noul question; otherwise selection falls back to all tests. `prDescription` can be supplied alongside `prTitle`.
+`beforeRequest` may be async. Keep the `scope` Choice and every `test_N` Noul question; otherwise selection falls back to all tests. Keep `createQuestion` deterministic because request packing may call it while sizing candidates. `prDescription` can be supplied alongside `prTitle`.
 
 <br />
 
@@ -251,7 +287,7 @@ console.log(
 );
 ```
 
-`id` must be unique in the supplied catalog. `assessments` contains each judged test's probability and resolved model. You can pass `client` to `selectTests()` to reuse a configured SDK client. `getGitChanges(cwd, baseRef?)` reads git changes for you; `detectCiDiff()` and `resolveConfig()` are available if your application owns the CI integration.
+`id` must be unique in the supplied catalog. `assessments` contains each judged test's probability and resolved model. `selectedIds: []` with no `fallbackReason` means a complete Jev decision selected no tests; a `fallbackReason` means all tests were retained. You can pass `client` to `selectTests()` to reuse a configured SDK client. `getGitChanges(cwd, baseRef?)` reads git changes for you; `detectCiDiff()` and `resolveConfig()` are available if your application owns the CI integration.
 
 <br />
 
@@ -262,13 +298,19 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | Option                                      | Environment variable                                         | Default                                 |
 | ------------------------------------------- | ------------------------------------------------------------ | --------------------------------------- |
 | `enabled`                                   | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`)         | `false`                                 |
+| `debug`                                     | `JEV_PLAYWRIGHT_DEBUG`                                      | `false`                                 |
 | `baseRef`                                   | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF`                   | CI baseline or local changes            |
 | `defaultBranch`                             | `JEV_PLAYWRIGHT_DEFAULT_BRANCH`                              | provider value, then `main`             |
 | `cwd`                                       | `JEV_PLAYWRIGHT_CWD`                                         | `process.cwd()`                         |
 | `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                              |
 | `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                    |
 | `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                   |
-| `batchSize`                                 | `JEV_PLAYWRIGHT_BATCH_SIZE`                                  | `50` (adjusted down for large excerpts) |
+| `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all`                                   |
+| `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                    | `false`                                 |
+| `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `1`                                     |
+| `limits.stateAndQuestionTokens`             | `JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS`           | `32000`                                 |
+| `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                      | `64000`                                 |
+| `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                        | `100`                                   |
 | `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                 |
 | `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                 |
 | `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                            |

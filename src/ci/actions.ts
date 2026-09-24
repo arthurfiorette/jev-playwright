@@ -43,10 +43,17 @@ export async function actionsDiff(
   const eventName = env.GITHUB_EVENT_NAME;
 
   if (eventName === 'pull_request' || eventName === 'pull_request_target') {
-    const target =
-      env.GITHUB_BASE_REF ??
-      stringField(recordField(recordField(event, 'pull_request'), 'base'), 'ref');
-    return targetRef(provider, target, 'target-branch');
+    const pullRequest = recordField(event, 'pull_request');
+    const target = env.GITHUB_BASE_REF ?? stringField(recordField(pullRequest, 'base'), 'ref');
+    const baseline = targetRef(provider, target, 'target-branch');
+    if (baseline.kind !== 'ref') return baseline;
+    const title = stringField(pullRequest, 'title');
+    const description = stringField(pullRequest, 'body');
+    return {
+      ...baseline,
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {})
+    };
   }
 
   if (env.GITHUB_REF && !env.GITHUB_REF.startsWith('refs/heads/')) {
@@ -57,5 +64,15 @@ export async function actionsDiff(
     env.GITHUB_REF?.replace(/^refs\/heads\//, '') ??
     (env.GITHUB_REF_TYPE === 'branch' ? env.GITHUB_REF_NAME : undefined);
   const before = eventName === 'push' ? stringField(event, 'before') : undefined;
-  return branchDiff(provider, branch, defaultBranch, before);
+  const baseline = branchDiff(provider, branch, defaultBranch, before);
+  if (baseline.kind !== 'ref') return baseline;
+
+  const message = stringField(recordField(event, 'head_commit'), 'message');
+  if (!message) return baseline;
+  const [title, ...body] = message.split('\n');
+  return {
+    ...baseline,
+    ...(title ? { title } : {}),
+    ...(body.length ? { description: body.join('\n') } : {})
+  };
 }

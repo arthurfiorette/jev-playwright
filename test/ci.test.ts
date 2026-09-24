@@ -180,3 +180,54 @@ test('explicit refs bypass CI detection and local runs retain working tree behav
   );
   assert.equal((await detectCiDiff(resolveConfig({}, ci), ci)).kind, 'unavailable');
 });
+
+test('available CI PR and commit text is carried as optional selection hints', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'jev-ci-hints-'));
+  const eventPath = join(cwd, 'event.json');
+
+  try {
+    await writeFile(
+      eventPath,
+      JSON.stringify({
+        repository: { default_branch: 'main' },
+        pull_request: {
+          base: { ref: 'main' },
+          title: 'Fix checkout redirects',
+          body: 'Update mobile checkout coverage'
+        }
+      })
+    );
+    const github = {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_EVENT_NAME: 'pull_request',
+      GITHUB_BASE_REF: 'main',
+      GITHUB_EVENT_PATH: eventPath
+    };
+    assert.deepEqual(await detectCiDiff(resolveConfig({}, github), github), {
+      kind: 'ref',
+      provider: 'github',
+      baseRef: 'refs/remotes/origin/main',
+      source: 'target-branch',
+      title: 'Fix checkout redirects',
+      description: 'Update mobile checkout coverage'
+    });
+
+    const gitlab = {
+      GITLAB_CI: 'true',
+      CI_MERGE_REQUEST_IID: '2',
+      CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main',
+      CI_MERGE_REQUEST_TITLE: 'Fix billing',
+      CI_MERGE_REQUEST_DESCRIPTION: 'Covers refunds'
+    };
+    assert.deepEqual(await detectCiDiff(resolveConfig({}, gitlab), gitlab), {
+      kind: 'ref',
+      provider: 'gitlab',
+      baseRef: 'refs/remotes/origin/main',
+      source: 'target-branch',
+      title: 'Fix billing',
+      description: 'Covers refunds'
+    });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

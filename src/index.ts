@@ -1,6 +1,11 @@
 export type { CiDiff, CiProvider } from './ci.js';
 export { detectCiDiff } from './ci.js';
-export type { JevPlaywrightConfig, ResolvedConfig } from './config.js';
+export type {
+  JevDiffConfig,
+  JevPlaywrightConfig,
+  JevRequestLimits,
+  ResolvedConfig
+} from './config.js';
 export { resolveConfig } from './config.js';
 export { defineConfigWithJev } from './define-config.js';
 export type { Changes } from './git.js';

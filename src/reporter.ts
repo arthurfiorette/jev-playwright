@@ -1,8 +1,10 @@
+import { resolve } from 'node:path';
 import type { Reporter, TestCase } from '@playwright/test/reporter';
 import { detectCiDiff } from './ci.js';
 import type { JevPlaywrightConfig } from './config.js';
-import { resolveConfig } from './config.js';
-import { getGitChanges } from './git.js';
+import { filterPaths, resolveConfig } from './config.js';
+import { debugLog } from './debug.js';
+import { getCommitTitle, getGitChanges } from './git.js';
 import { selectTests } from './selection.js';
 import { withTestSource } from './source.js';
 
@@ -36,6 +38,7 @@ export class JevReporter implements Reporter {
       if (!tests.length) return;
 
       const ciDiff = await detectCiDiff(config);
+      debugLog(config.debug, 'git baseline', ciDiff);
       if (ciDiff.kind === 'unavailable') {
         process.stderr.write(
           `[jev-playwright] Running all tests: ${ciDiff.provider}: ${ciDiff.reason}\n`
@@ -46,8 +49,26 @@ export class JevReporter implements Reporter {
       const changes = await getGitChanges(
         config.cwd,
         ciDiff.kind === 'ref' ? ciDiff.baseRef : undefined,
-        config
+        config,
+        tests.map((test) => test.location.file)
       );
+      if (ciDiff.kind === 'ref') {
+        const title =
+          ciDiff.title ?? (config.prTitle ? undefined : await getCommitTitle(config.cwd));
+        if (title) changes.title = title;
+        if (ciDiff.description) changes.description = ciDiff.description;
+      }
+      const changed = new Set(changes.files.map((file) => resolve(config.cwd, file)));
+      debugLog(config.debug, 'changed paths', changes.files);
+      debugLog(config.debug, 'included paths', filterPaths(changes.files, config));
+      debugLog(
+        config.debug,
+        'forced spec paths',
+        tests
+          .filter((test) => changed.has(resolve(test.location.file)))
+          .map((test) => test.location.file)
+      );
+      debugLog(config.debug, 'model name-status', changes.statuses);
       const catalog = tests.map((test) => ({
         id: test.id,
         file: test.location.file,
@@ -67,6 +88,15 @@ export class JevReporter implements Reporter {
         return;
       }
       const selected = new Set(result.selectedIds);
+      if (!selected.size) {
+        // Playwright treats an entirely excluded suite as an error; skipped tests keep the deliberate no-op successful.
+        for (const test of tests) testRun.skip(test, 'Jev found no relevant tests');
+        process.stderr.write(
+          `[jev-playwright] Selected 0/${tests.length} tests (complete Jev decision: no relevant tests; skipped)\n`
+        );
+        return;
+      }
+
       for (const test of tests) {
         if (!selected.has(test.id)) testRun.exclude(test as TestCase);
       }

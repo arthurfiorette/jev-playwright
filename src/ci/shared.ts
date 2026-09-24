@@ -9,6 +9,8 @@ export type CiDiff =
       provider: CiProvider | 'explicit';
       baseRef: string;
       source: 'explicit' | 'previous-push' | 'target-branch' | 'default-branch';
+      title?: string;
+      description?: string;
     }
   | { kind: 'unavailable'; provider: CiProvider | 'unknown'; reason: string };
 

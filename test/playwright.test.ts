@@ -1,6 +1,26 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { rm, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
+
+function localGitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of [
+    'BASE_REF',
+    'JEV_PLAYWRIGHT_BASE_REF',
+    'CI',
+    'GITHUB_ACTIONS',
+    'GITEA_ACTIONS',
+    'GITLAB_CI',
+    'BITBUCKET_BUILD_NUMBER',
+    'TF_BUILD'
+  ]) {
+    delete env[key];
+  }
+  return env;
+}
 
 test('Playwright loads the reporter and discovers tests without a model request', () => {
   const output = execFileSync(
@@ -31,7 +51,7 @@ test('reporter runs actual Playwright tests and handles a missing provider by ru
     {
       encoding: 'utf8',
       env: {
-        ...process.env,
+        ...localGitEnv(),
         JEV_PLAYWRIGHT_ENABLED: 'true',
         JEV_PLAYWRIGHT_INCLUDE: '["src/config.ts"]',
         JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE: 'true',
@@ -41,4 +61,47 @@ test('reporter runs actual Playwright tests and handles a missing provider by ru
     }
   );
   assert.match(output, /2 passed/);
+});
+
+test('reporter can exclude every test after a complete empty Jev decision', async () => {
+  const change = `test/fixtures/.jev-change-${randomUUID()}.txt`;
+  const file = resolve(change);
+  await writeFile(file, 'fixture change\n', { flag: 'wx' });
+
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [
+        'node_modules/@playwright/test/cli.js',
+        'test',
+        '-c',
+        'test/fixtures/empty.config.ts',
+        '--workers=1'
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...localGitEnv(),
+          JEV_PLAYWRIGHT_ENABLED: 'true',
+          JEV_PLAYWRIGHT_DEBUG: 'true',
+          JEV_PLAYWRIGHT_INCLUDE: JSON.stringify([change]),
+          JEV_PLAYWRIGHT_PROVIDER_KEY: '',
+          TYPESAFE_API_KEY: ''
+        }
+      }
+    );
+
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    assert.match(
+      run.stderr,
+      /Selected 0\/2 tests \(complete Jev decision: no relevant tests; skipped\)/
+    );
+    assert.match(run.stderr, /\[jev-playwright:debug\] changed paths/);
+    assert.match(run.stderr, /\[jev-playwright:debug\] request 1 state/);
+    assert.match(run.stderr, /\[jev-playwright:debug\] request 1 questions/);
+    assert.match(run.stdout, /2 skipped/);
+    assert.doesNotMatch(run.stdout, /2 passed/);
+  } finally {
+    await rm(file);
+  }
 });
