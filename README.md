@@ -117,20 +117,20 @@ If no test meets the threshold, Playwright marks the tests as skipped and exits 
 
 ### Smart diff selection
 
-The model receives a compact shared **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), and patch text. Each `test_N` question contains that test's title, relative file, optional project, and optional source excerpt next to its decision instructions. Question keys alone are not model context. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title or description is unavailable, the checked-out commit subject or body fills the missing field. Explicit `prTitle` and `prDescription` override these hints. Empty fields are omitted. Titles and descriptions are context, not a substitute for code changes.
+Jev sees changed files, their add/modify/delete/rename status, and the git patch. Each test question includes its title, relative path, and optional source body. Available PR title and description provide additional context; otherwise CI can use the commit message. Set `prTitle` or `prDescription` to override those hints.
 
-PR/commit descriptions are converted from GitHub-flavored Markdown to plain text with `remark`, `remark-gfm`, and `strip-markdown`, then whitespace is collapsed and the result is capped at 2,000 characters (titles at 200). This removes HTML comments, formatting, fenced code, and tables from **the hint only**; it does not change the git patch. If the description contains important code or tabular context, put that information in the changed files or provide a custom `beforeRequest` hook.
+Descriptions are converted to plain text and limited to 2,000 characters; titles are limited to 200. This cleanup affects only the hint, not the patch.
 
 | Change | Context sent to Jev |
 | --- | --- |
-| Patch fits | Complete name-status inventory and patch; tests are split into requests only when necessary. |
-| Patch exceeds the request budget | Complete name-status inventory and **every per-file patch**, grouped into chunks. Test probabilities are combined by taking the highest relevance per test across chunks. |
+| Patch fits | All changed paths and the full patch are sent together. |
+| Patch exceeds the request budget | Every file's patch is evaluated in chunks. A test is selected if any chunk finds it relevant. |
 | Only discovered specs changed | No Jev call; those specs run directly. |
-| A patch cannot fit even alone, a chunk fails, or `limits.maxRequests` is reached | Full discovered suite runs. Nothing is silently truncated after the configured git filters. |
+| One file's patch cannot fit, a request fails, or `limits.maxRequests` is reached | Full discovered suite runs. |
 
-“No tests” is accepted only after **every** required patch chunk has been evaluated consistently. The file inventory is repeated across chunks; a very large inventory can itself force a full run. Caller-provided changes without complete per-file `patches` can be evaluated when their full diff fits, but cannot be split safely when it does not.
+The reporter skips all tests only after **every** required chunk is evaluated. Programmatic callers supplying an oversized diff must also supply per-file `patches`; otherwise the full suite runs.
 
-For an exact view of the selection, run with `DEBUG=jev-playwright:*`. The `debug` package writes diagnostics under the `jev-playwright:reporter` and `jev-playwright:selection` namespaces, so you can enable either namespace individually. Output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state, questions, and Jev response** for each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
+To inspect selection, run with `DEBUG=jev-playwright:*`. Logs show changed paths, forced specs, request contents, and Jev's responses. They can contain source code and PR text.
 
 <br />
 
@@ -254,7 +254,7 @@ export default defineConfigWithJev(
 );
 ```
 
-`beforeRequest` may be async. Keep every `test_N` Noul question; otherwise selection falls back to all tests. The package appends the test title, relative file, optional project, and optional source to `createQuestion` output. Keep `createQuestion` deterministic because request packing may call it while sizing candidates. `prDescription` can be supplied alongside `prTitle`.
+`beforeRequest` may be async. Keep every `test_N` question or the full suite runs. Test details are appended to `createQuestion` output. Keep `createQuestion` deterministic because request sizing can call it more than once.
 
 <br />
 
