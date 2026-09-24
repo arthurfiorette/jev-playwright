@@ -70,9 +70,9 @@ Playwright discovers tests first, applying its usual project, grep, and `.only` 
 
 1. Reads the git change set. Locally, this includes staged, unstaged, and untracked files. In CI, it [detects a baseline](#use-it-in-ci).
 2. Always runs directly changed specs. It omits those specs from Jev's candidate tests and git patch context. Other changed files, including shared E2E fixtures, remain in context.
-3. Packs as many candidates as fit into each Jev request. One Choice question judges whether **all, none, or some tests in that batch** are relevant; independent yes/no questions score each test in the same request. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
+3. Packs as many candidates as fit into each Jev request. Each test gets its own typed yes/no question containing its title, project, and file path **relative to `cwd`**; the git patch stays in the shared state. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
 
-Set `includeTestSource: true` to also send an excerpt from each test declaration through the next discovered test (or the end of the file). This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. The excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
+Test bodies are **not sent by default**; each question still includes its test title, file, and project. Set `includeTestSource: true` to also send an excerpt from each test declaration through the next discovered test (or the end of the file). This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. The excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
 
 ```ts
 export default defineConfigWithJev(
@@ -109,11 +109,11 @@ export default defineConfigWithJev(
 
 Jev currently documents **32k tokens for state plus the longest question**, and **64k for the full request**. The selector batches by these budgets, not a fixed number of tests. Configure different provider limits with `limits: { stateAndQuestionTokens: 32000, requestTokens: 64000, maxRequests: 100 }`. Because the SDK does not expose Jev's tokenizer, sizing uses serialized UTF-8 bytes as a conservative proxy and may split earlier than the model requires. For OpenRouter's documented 32k total context, set `limits.requestTokens` to `32000`.
 
-**All, none, or some:** When Jev consistently chooses `none` for every batch, the reporter marks the discovered tests as skipped and Playwright exits successfully if nothing else fails. `all` keeps every candidate; `some` uses the per-test probabilities. Directly changed specs still run. An unavailable git ref, missing credentials, oversized change, invalid answer, or contradictory batch decision instead runs the **full discovered suite**. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>` to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before relying on reduced CI runs.
+**All, none, or some** are derived from those per-test probabilities; Jev is not asked a second, potentially contradictory scope question. When no test meets the threshold across every evaluated batch, the reporter marks discovered tests as skipped and Playwright exits successfully if nothing else fails. Directly changed specs still run. An unavailable git ref, missing credentials, oversized change, or invalid/incomplete per-test answer instead runs the **full discovered suite**. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>` to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before relying on reduced CI runs.
 
 ### Smart diff selection
 
-The model receives a compact **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), patch text, and keyed test descriptions. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title or description is unavailable, the checked-out commit subject or body fills the missing field. Explicit `prTitle` and `prDescription` override these hints. Empty fields are omitted. Titles and descriptions are context, not a substitute for code changes.
+The model receives a compact shared **string state** with bounded PR/commit title and description hints, git name-status entries (`A`, `M`, `D`, renames), and patch text. Each `test_N` question contains that test's title, project, file, and optional source excerpt next to its decision instructions. Question keys alone are not model context. GitHub/Gitea event payloads and GitLab CI variables provide PR hints when available. When a CI title or description is unavailable, the checked-out commit subject or body fills the missing field. Explicit `prTitle` and `prDescription` override these hints. Empty fields are omitted. Titles and descriptions are context, not a substitute for code changes.
 
 PR/commit descriptions are converted from GitHub-flavored Markdown to plain text with `remark`, `remark-gfm`, and `strip-markdown`, then whitespace is collapsed and the result is capped at 2,000 characters (titles at 200). This removes HTML comments, formatting, fenced code, and tables from **the hint only**; it does not change the git patch. If the description contains important code or tabular context, put that information in the changed files or provide a custom `beforeRequest` hook.
 
@@ -127,8 +127,6 @@ PR/commit descriptions are converted from GitHub-flavored Markdown to plain text
 “No tests” is accepted only after **every** required patch chunk has been evaluated consistently. The file inventory is repeated across chunks; a very large inventory can itself force a full run. Caller-provided changes without complete per-file `patches` can be evaluated when their full diff fits, but cannot be split safely when it does not.
 
 For an exact view of the selection, set `debug: true` or run with `JEV_PLAYWRIGHT_DEBUG=true`. The stderr output lists the git baseline, changed and included paths, forced specs, name-status entries, chunk sizes, and the **full state, questions, and Jev response** for each request. Debug output can contain source code and PR text, so enable it only where those logs are appropriate.
-
-If the log says `Jev scope conflicts with per-test answers`, the batch-level all/none/some choice disagreed with the thresholded per-test probabilities. The reporter runs all tests in this case. Inspect the response in debug output before changing the threshold or question wording.
 
 <br />
 
@@ -252,7 +250,7 @@ export default defineConfigWithJev(
 );
 ```
 
-`beforeRequest` may be async. Keep the `scope` Choice and every `test_N` Noul question; otherwise selection falls back to all tests. Keep `createQuestion` deterministic because request packing may call it while sizing candidates. `prDescription` can be supplied alongside `prTitle`.
+`beforeRequest` may be async. Keep every `test_N` Noul question; otherwise selection falls back to all tests. The package appends the test title, project, file, and optional source to `createQuestion` output. Keep `createQuestion` deterministic because request packing may call it while sizing candidates. `prDescription` can be supplied alongside `prTitle`.
 
 <br />
 

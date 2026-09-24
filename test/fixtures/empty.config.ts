@@ -8,12 +8,7 @@ export default defineConfigWithJev(
       systemOne: (async (request: { questions: Record<string, unknown> }) => ({
         model: 'fixture',
         answers: Object.fromEntries(
-          Object.keys(request.questions).map((key) => [
-            key,
-            key === 'scope'
-              ? { type: 'choice', choice: 'none', confidence: 1 }
-              : { type: 'noul', noul: 0 }
-          ])
+          Object.keys(request.questions).map((key) => [key, { type: 'noul', noul: 0 }])
         )
       })) as unknown as TypeSafeClient['systemOne']
     }

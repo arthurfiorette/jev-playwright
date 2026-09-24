@@ -11,34 +11,17 @@ const tests = [
   { id: 'c', file: '/repo/e2e/c.spec.ts', title: 'account', project: 'chromium' }
 ];
 
-function client(
-  probabilities: number[],
-  chosenScope?: 'all' | 'none' | 'some'
-): Pick<TypeSafeClient, 'systemOne'> {
+function client(probabilities: number[]): Pick<TypeSafeClient, 'systemOne'> {
   return {
     systemOne: (async ({ questions }: { questions: Record<string, unknown> }) => {
-      const keys = Object.keys(questions).filter((key) => key !== 'scope');
-      const scope =
-        chosenScope ??
-        (keys.every((_, index) => (probabilities[index] ?? 0) >= 0.5)
-          ? 'all'
-          : keys.every((_, index) => (probabilities[index] ?? 0) < 0.5)
-            ? 'none'
-            : 'some');
       return {
         model: 'jev-test',
-        answers: {
-          scope: { type: 'choice', choice: scope, confidence: 0.9 },
-          ...Object.fromEntries(
-            keys.map((key, index) => [
-              key,
-              {
-                type: 'noul',
-                noul: probabilities[index]
-              }
-            ])
-          )
-        }
+        answers: Object.fromEntries(
+          Object.keys(questions).map((key, index) => [
+            key,
+            { type: 'noul', noul: probabilities[index] }
+          ])
+        )
       };
     }) as unknown as TypeSafeClient['systemOne']
   };
@@ -149,7 +132,7 @@ test('excludes low probability tests but fails open for incomplete answers', asy
   assert.match(incomplete.fallbackReason ?? '', /Invalid Jev answer/);
 });
 
-test('Jev can choose no tests, while incomplete or contradictory decisions run all', async () => {
+test('complete low probabilities select no tests while incomplete answers run all', async () => {
   const input = {
     tests,
     changes: { files: ['src/login.ts'] },
@@ -164,10 +147,6 @@ test('Jev can choose no tests, while incomplete or contradictory decisions run a
   const incomplete = await selectTests({ ...input, client: client([0]) });
   assert.deepEqual(incomplete.selectedIds, ['a', 'b', 'c']);
   assert.match(incomplete.fallbackReason ?? '', /Invalid Jev answer/);
-
-  const contradictory = await selectTests({ ...input, client: client([0.9, 0.1, 0.2], 'none') });
-  assert.deepEqual(contradictory.selectedIds, ['a', 'b', 'c']);
-  assert.match(contradictory.fallbackReason ?? '', /scope conflicts/);
 
   const noChanges = await selectTests({
     ...input,
@@ -213,15 +192,13 @@ test('custom question and beforeRequest hook customize the SDK request', async (
         state = JSON.stringify(request.state);
         return {
           model: 'mock',
-          answers: {
-            scope: { type: 'choice', choice: 'all', confidence: 1 },
-            test_0: { type: 'noul', noul: 0.8 }
-          }
+          answers: { test_0: { type: 'noul', noul: 0.8 } }
         };
       }) as unknown as TypeSafeClient['systemOne']
     }
   });
-  assert.equal(question, 'Does checkout depend on test_0?');
+  assert.match(question, /^Does checkout depend on test_0\?/);
+  assert.match(question, /Test: test_0 \| chromium \| e2e\/a\.spec\.ts \| checkout/);
   assert.equal(state, '{"feature":"login"}');
   assert.deepEqual(response.selectedIds, ['a']);
 });
@@ -250,8 +227,8 @@ test('source context is opt-in and bounded per candidate', () => {
     resolveConfig({ includeTestSource: true, maxTestSourceTokens: 10 }, {})
   );
 
-  assert.doesNotMatch(String(without.state), /x{60}/);
-  assert.match(String(withSource.state), /x{60}/);
+  assert.doesNotMatch(String(without.questions.test_0?.instructions), /x{60}/);
+  assert.match(String(withSource.questions.test_0?.instructions), /x{60}/);
 });
 
 test('string state keeps compact statuses and bounded human hints', () => {
@@ -264,11 +241,15 @@ test('string state keeps compact statuses and bounded human hints', () => {
       title: 'Payment fix',
       description: `<details>${'context '.repeat(500)}</details>`
     },
-    resolveConfig({}, {})
+    resolveConfig({ cwd: '/repo' }, {})
   );
   const state = String(request.state);
   assert.match(state, /M src\/payments\.ts/);
-  assert.match(state, /test_0 \| chromium \| \/repo\/e2e\/a\.spec\.ts \| checkout/);
+  assert.doesNotMatch(state, /\/repo\/e2e\/a\.spec\.ts/);
+  assert.match(
+    String(request.questions.test_0?.instructions),
+    /Test: test_0 \| chromium \| e2e\/a\.spec\.ts \| checkout/
+  );
   assert.match(state, /Patch:\n\+updated payments/);
   assert.ok(state.length < 3_000);
 });
@@ -313,28 +294,33 @@ test('PR hints handle GitHub-flavored tables and task lists without raw markup',
 
 test('source-aware batching uses actual excerpt sizes', async () => {
   const batchSizes: number[] = [];
+  const candidates = tests.map((candidate) => ({ ...candidate, source: 'x'.repeat(15_000) }));
+  const context = { files: ['src/feature.ts'] };
+  const resolved = resolveConfig({ includeTestSource: true, cwd: '/repo' }, {});
+  const two = Buffer.byteLength(
+    JSON.stringify(createRequest(candidates.slice(0, 2), context, resolved))
+  );
+  const three = Buffer.byteLength(JSON.stringify(createRequest(candidates, context, resolved)));
   const mockedClient: Pick<TypeSafeClient, 'systemOne'> = {
     systemOne: (async ({ questions }: { questions: Record<string, unknown> }) => {
       const keys = Object.keys(questions);
-      batchSizes.push(keys.length - 1);
+      batchSizes.push(keys.length);
       return {
         model: 'mock',
-        answers: Object.fromEntries(
-          keys.map((key) => [
-            key,
-            key === 'scope'
-              ? { type: 'choice', choice: 'all', confidence: 1 }
-              : { type: 'noul', noul: 1 }
-          ])
-        )
+        answers: Object.fromEntries(keys.map((key) => [key, { type: 'noul', noul: 1 }]))
       };
     }) as unknown as TypeSafeClient['systemOne']
   };
 
   const selection = await selectTests({
-    tests: tests.map((candidate) => ({ ...candidate, source: 'x'.repeat(15_000) })),
-    changes: { files: ['src/feature.ts'] },
-    config: { enabled: true, includeTestSource: true, cwd: '/repo' },
+    tests: candidates,
+    changes: context,
+    config: {
+      enabled: true,
+      includeTestSource: true,
+      cwd: '/repo',
+      limits: { requestTokens: Math.floor((two + three) / 2) }
+    },
     client: mockedClient
   });
 
@@ -355,12 +341,7 @@ test('default limits fit more than fifty small candidates in one request', async
       return {
         model: 'mock',
         answers: Object.fromEntries(
-          Object.keys(questions).map((key) => [
-            key,
-            key === 'scope'
-              ? { type: 'choice', choice: 'all', confidence: 1 }
-              : { type: 'noul', noul: 1 }
-          ])
+          Object.keys(questions).map((key) => [key, { type: 'noul', noul: 1 }])
         )
       };
     }) as unknown as TypeSafeClient['systemOne']
@@ -382,10 +363,7 @@ test('configurable limits split candidate requests, but do not drop an oversized
   const changes = { files: ['src/feature.ts'], diff: '+change' };
   const config = resolveConfig({ cwd: '/repo' }, {});
   const estimate = (request: ReturnType<typeof createRequest>) => {
-    const questions = Object.values(request.questions).map((question) =>
-      Buffer.byteLength(JSON.stringify(question))
-    );
-    return Buffer.byteLength(JSON.stringify(request.state)) + Math.max(...questions);
+    return Buffer.byteLength(JSON.stringify(request));
   };
   const one = estimate(createRequest(tests.slice(0, 1), changes, config));
   const two = estimate(createRequest(tests.slice(0, 2), changes, config));
@@ -393,22 +371,17 @@ test('configurable limits split candidate requests, but do not drop an oversized
   const calls: number[] = [];
   const mockedClient: Pick<TypeSafeClient, 'systemOne'> = {
     systemOne: (async ({ questions }: { questions: Record<string, unknown> }) => {
-      calls.push(Object.keys(questions).length - 1);
+      calls.push(Object.keys(questions).length);
       return {
         model: 'mock',
         answers: Object.fromEntries(
-          Object.keys(questions).map((key) => [
-            key,
-            key === 'scope'
-              ? { type: 'choice', choice: 'all', confidence: 1 }
-              : { type: 'noul', noul: 1 }
-          ])
+          Object.keys(questions).map((key) => [key, { type: 'noul', noul: 1 }])
         )
       };
     }) as unknown as TypeSafeClient['systemOne']
   };
 
-  const options = { enabled: true, cwd: '/repo', limits: { stateAndQuestionTokens: limit } };
+  const options = { enabled: true, cwd: '/repo', limits: { requestTokens: limit } };
   const result = await selectTests({
     tests,
     changes,
@@ -459,33 +432,19 @@ test('oversized patches are evaluated in chunks and their selected tests are uni
   const mockedClient: Pick<TypeSafeClient, 'systemOne'> = {
     systemOne: (async (request: { state: string; questions: Record<string, unknown> }) => {
       requests.push(request.state);
-      const keys = Object.keys(request.questions).filter((key) => key !== 'scope');
+      const keys = Object.keys(request.questions);
       const probabilities = keys.map((key) => {
-        const line = request.state.split('\n').find((entry) => entry.startsWith(`${key} |`)) ?? '';
+        const line = String((request.questions[key] as { instructions?: string })?.instructions);
         return (request.state.includes('ALPHA_PATCH') && line.includes('checkout')) ||
           (request.state.includes('BETA_PATCH') && line.includes('login'))
           ? 1
           : 0;
       });
-      const scope = probabilities.every((probability) => probability === 1)
-        ? 'all'
-        : probabilities.every((probability) => probability === 0)
-          ? 'none'
-          : 'some';
       return {
         model: 'mock',
-        answers: {
-          scope: { type: 'choice', choice: scope, confidence: 1 },
-          ...Object.fromEntries(
-            keys.map((key, index) => [
-              key,
-              {
-                type: 'noul',
-                noul: probabilities[index]
-              }
-            ])
-          )
-        }
+        answers: Object.fromEntries(
+          keys.map((key, index) => [key, { type: 'noul', noul: probabilities[index] }])
+        )
       };
     }) as unknown as TypeSafeClient['systemOne']
   };

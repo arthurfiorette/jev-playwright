@@ -1,5 +1,6 @@
+import { isAbsolute, relative, resolve } from 'node:path';
 import type { SystemOneRequest } from '@typesafe-ai/sdk';
-import { choice, noul } from '@typesafe-ai/sdk';
+import { noul } from '@typesafe-ai/sdk';
 import { remark } from 'remark';
 import remarkGfm from 'remark-gfm';
 import stripMarkdown from 'strip-markdown';
@@ -42,9 +43,24 @@ function changedPaths(changes: Changes): string[] {
   );
 }
 
-/** Default question includes the full candidate key because question identifiers are not model instructions. */
+function testPath(file: string, cwd: string): string {
+  const path = isAbsolute(file) ? file : resolve(cwd, file);
+  return relative(cwd, path).replaceAll('\\', '/');
+}
+
+/** Identify the test within instructions because question keys are not model context. */
 export function defaultQuestion(_test: TestDescriptor, key: string): string {
-  return `Could the changed behavior affect the assertions or setup of ${key}, directly or indirectly?`;
+  return `Could the change affect the assertions or setup of ${key} described below, directly or indirectly?`;
+}
+
+function testQuestion(test: TestDescriptor, key: string, config: ResolvedConfig): string {
+  return [
+    (config.createQuestion ?? defaultQuestion)(test, key),
+    `Test: ${key} | ${compactLine(test.project ?? '')} | ${compactLine(testPath(test.file, config.cwd))} | ${compactLine(test.title)}`,
+    ...(config.includeTestSource && test.source
+      ? [`Test source:\n${limitTestSource(test.source, config.maxTestSourceTokens)}`]
+      : [])
+  ].join('\n');
 }
 
 /** Build one typed yes/no question per candidate in a bounded batch. */
@@ -54,27 +70,12 @@ export function createRequest(
   config: ResolvedConfig
 ): SystemOneRequest {
   const questions: SystemOneRequest['questions'] = {};
-  const candidateLines: string[] = [];
 
   for (const [index, test] of batch.entries()) {
     const key = `test_${index}`;
-    questions[key] = noul((config.createQuestion ?? defaultQuestion)(test, key));
-    candidateLines.push(
-      `${key} | ${compactLine(test.project ?? '')} | ${compactLine(test.file)} | ${compactLine(test.title)}`
-    );
-    if (config.includeTestSource && test.source) {
-      candidateLines.push(limitTestSource(test.source, config.maxTestSourceTokens));
-    }
+    questions[key] = noul(testQuestion(test, key, config));
   }
 
-  questions.scope = choice(
-    'For the changed behavior, how many of the candidate tests in this batch could have their behavior or setup affected, directly or indirectly?',
-    {
-      all: 'Every listed candidate test could be affected.',
-      none: 'No listed candidate test could be affected.',
-      some: 'At least one but not every listed candidate test could be affected.'
-    }
-  );
   const title = titleHint(config.prTitle ?? changes.title);
   const description = descriptionHint(config.prDescription ?? changes.description);
 
@@ -85,9 +86,7 @@ export function createRequest(
       ...(description ? [`Description: ${description}`] : []),
       'Changed files (status and path):',
       ...changedPaths(changes),
-      ...(changes.diff ? ['Patch:', changes.diff] : []),
-      'Candidate tests (id | project | file | title):',
-      ...candidateLines
+      ...(changes.diff ? ['Patch:', changes.diff] : [])
     ].join('\n'),
     questions
   };

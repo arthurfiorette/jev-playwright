@@ -97,8 +97,13 @@ test('reporter can exclude every test after a complete empty Jev decision', asyn
       /Selected 0\/2 tests \(complete Jev decision: no relevant tests; skipped\)/
     );
     assert.match(run.stderr, /\[jev-playwright:debug\] changed paths/);
+    assert.match(run.stderr, /\[jev-playwright:debug\] test source\n\{\n {2}"included": false/);
     assert.match(run.stderr, /\[jev-playwright:debug\] request 1 state/);
     assert.match(run.stderr, /\[jev-playwright:debug\] request 1 questions/);
+    assert.match(
+      run.stderr,
+      /Test: test_0 \| {2}\| test\/fixtures\/smoke\.spec\.ts \| first fixture/
+    );
     assert.match(run.stderr, /\[jev-playwright:debug\] request 1 response/);
     assert.match(run.stdout, /2 skipped/);
     assert.doesNotMatch(run.stdout, /2 passed/);

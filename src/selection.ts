@@ -97,10 +97,10 @@ async function assessBatch(
     ? await config.beforeRequest(request, { changes, tests })
     : request;
   if (
-    prepared.questions?.scope?.type !== 'choice' ||
+    !prepared?.questions ||
     tests.some((_, index) => prepared.questions[`test_${index}`]?.type !== 'noul')
   ) {
-    throw new Error('beforeRequest must retain the scope choice and each typed relevance question');
+    throw new Error('beforeRequest must retain each typed relevance question');
   }
   if (!fitsRequestLimits(prepared, config.limits)) {
     throw new Error('Jev request exceeds configured limits after beforeRequest');
@@ -113,10 +113,6 @@ async function assessBatch(
   debugLog(config.debug, `request ${counter.requests} questions`, prepared.questions);
   const response = await client.systemOne(prepared);
   debugLog(config.debug, `request ${counter.requests} response`, response);
-  const scope = response.answers?.scope;
-  if (scope?.type !== 'choice' || !['all', 'none', 'some'].includes(scope.choice)) {
-    throw new Error('Invalid Jev scope answer');
-  }
 
   const assessments: Assessment[] = [];
   for (const [index, test] of tests.entries()) {
@@ -130,17 +126,6 @@ async function assessBatch(
       throw new Error(`Invalid Jev answer for ${test.id}`);
     }
     assessments.push({ id: test.id, probability: answer.noul, model: response.model });
-  }
-
-  const relevant = assessments.filter(
-    (assessment) => assessment.probability >= config.threshold
-  ).length;
-  if (
-    (scope.choice === 'all' && relevant !== tests.length) ||
-    (scope.choice === 'none' && relevant !== 0) ||
-    (scope.choice === 'some' && (relevant === 0 || relevant === tests.length))
-  ) {
-    throw new Error('Jev scope conflicts with per-test answers');
   }
 
   return assessments;

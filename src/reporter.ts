@@ -73,9 +73,13 @@ export class JevReporter implements Reporter {
       const catalog = tests.map((test) => ({
         id: test.id,
         file: test.location.file,
-        title: test.titlePath().join(' › '),
+        title: test.titlePath().slice(3).join(' › ') || test.title,
         project: test.parent.project()?.name ?? ''
       }));
+      debugLog(config.debug, 'test source', {
+        included: config.includeTestSource,
+        ...(config.includeTestSource ? { maxLexicalTokensPerTest: config.maxTestSourceTokens } : {})
+      });
       const descriptors = config.includeTestSource
         ? await withTestSource(tests, catalog, config.maxTestSourceTokens)
         : catalog;
