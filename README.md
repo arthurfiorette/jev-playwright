@@ -91,7 +91,7 @@ export default defineConfigWithJev(
 
 Globs match repository-relative **changed paths**, not test titles. Exclusions take precedence. A directly changed spec still runs even if its path is excluded from model context. Source excerpts and diffs are sent to your configured provider, so use the filters before enabling source context for sensitive tests. There is no universal safe extension-based exclusion: Markdown can be rendered application content. If your repository's docs cannot affect E2E behavior, add `exclude: ['**/*.md', '**/*.mdx']` explicitly. Exclusions reduce model context for mixed changes; if every changed path is excluded, the selector currently runs the full suite.
 
-Git uses `--unified=1` and ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
+Git uses `--unified=3` and ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
 
 ```ts
 export default defineConfigWithJev(
@@ -100,7 +100,7 @@ export default defineConfigWithJev(
     diff: {
       whitespace: 'none',
       ignoreBlankLines: false,
-      contextLines: 1
+      contextLines: 3
     }
   },
   { reporter: 'list' }
@@ -310,7 +310,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                   |
 | `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all` (ignore whitespace-only changes); `none` preserves them |
 | `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                    | `false`                                 |
-| `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `1`                                     |
+| `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `3`                                     |
 | `limits.stateAndQuestionTokens`             | `JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS`           | `32000`                                 |
 | `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                      | `64000`                                 |
 | `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                        | `100`                                   |

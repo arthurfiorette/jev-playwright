@@ -74,7 +74,7 @@ function diffFlags(config?: ResolvedConfig): string[] {
   return [
     '--no-ext-diff',
     '--find-renames',
-    `--unified=${config?.diff.contextLines ?? 1}`,
+    `--unified=${config?.diff.contextLines ?? 3}`,
     ...(config?.diff.ignoreBlankLines ? ['--ignore-blank-lines'] : []),
     ...(whitespaceFlag ? [whitespaceFlag] : [])
   ];

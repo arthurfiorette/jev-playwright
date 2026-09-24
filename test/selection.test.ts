@@ -59,6 +59,8 @@ test('config precedence, glob filtering, and validation', () => {
     true
   );
   assert.equal(config.diff.whitespace, 'all');
+  assert.equal(config.diff.contextLines, 3);
+  assert.equal(resolveConfig({ diff: { contextLines: 1 } }, {}).diff.contextLines, 1);
   assert.deepEqual(filterPaths(['src/a.ts', 'src/generated/b.ts', 'test/a.ts'], config), [
     'src/a.ts'
   ]);

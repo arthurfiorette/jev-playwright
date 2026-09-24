@@ -27,7 +27,7 @@ export interface JevDiffConfig {
   whitespace?: 'all' | 'change' | 'eol' | 'none';
   /** Omit hunks consisting solely of blank-line changes. @default false */
   ignoreBlankLines?: boolean;
-  /** Unchanged lines shown around each hunk. @default 1 */
+  /** Unchanged lines shown around each hunk. @default 3 */
   contextLines?: number;
 }
 
@@ -45,7 +45,7 @@ export interface JevPlaywrightConfig {
   include?: string[];
   /** Changed paths excluded from context; exclusions take precedence. @default [] */
   exclude?: string[];
-  /** How git formats the patch sent to Jev. @default { whitespace: 'all', ignoreBlankLines: false, contextLines: 1 } */
+  /** How git formats the patch sent to Jev. @default { whitespace: 'all', ignoreBlankLines: false, contextLines: 3 } */
   diff?: JevDiffConfig;
   /** Select tests at or above this yes probability. @default 0.5 */
   threshold?: number;
@@ -220,7 +220,7 @@ export function resolveConfig(
       contextLines:
         parseNumber(readEnv(env, 'DIFF_CONTEXT_LINES'), 'JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES') ??
         config.diff?.contextLines ??
-        1
+        3
     },
     threshold:
       parseNumber(readEnv(env, 'THRESHOLD'), 'JEV_PLAYWRIGHT_THRESHOLD') ?? config.threshold ?? 0.5,
