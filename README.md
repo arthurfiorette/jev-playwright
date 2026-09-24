@@ -16,11 +16,11 @@
 
 # Jev Playwright
 
-**Run the Playwright tests relevant to a code change.** Add one reporter; it uses [Jev](https://docs.typesafe.ai/) to select existing tests before they run. If selection cannot be completed, Playwright runs the full suite.
+**Run the Playwright tests relevant to a code change.** Add one reporter; it uses [Jev](https://docs.typesafe.ai/), TypeSafe's model for typed yes/no decisions, to select existing tests before they run.
 
 Package-aware tools such as Turborepo and Nx can scope unit tests using the changed-package graph. E2E tests are harder: a single browser journey can cross many packages, pages, and services. `jev-playwright` compares the change with Playwright's discovered tests to select relevant journeys **before browser execution**, reducing test runtime in large CI suites.
 
-Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started) · [Smart diff selection](#smart-diff-selection) · [Choose a provider](#choose-a-jev-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
+**Requirements:** Node.js 24.16+ (declared by this package) and Playwright 1.62+ (required for reporter `preprocess()`). [Get started](#get-started) · [Choose an AI provider](#choose-an-ai-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
 
 <br />
 
@@ -39,6 +39,8 @@ Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started
    ```
 
    Using OpenRouter instead? See [OpenRouter setup](#openrouter).
+
+   **What leaves your machine:** Jev receives changed paths, git patches, test titles, and test callback bodies/comments by default. PR or commit descriptions may also be sent. **Secrets in diffs or test source are not redacted.** Filter sensitive changed paths with `include`/`exclude`; set `includeTestSource: false` if test bodies should stay local.
 
 3. Add the reporter to `playwright.config.ts`:
 
@@ -60,7 +62,9 @@ Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started
    pnpm exec playwright test
    ```
 
-`defineConfigWithJev(jevOptions, playwrightConfig)` preserves your Playwright settings and existing reporters, then adds the Jev reporter. It accepts `reporter: 'list'` as well as a reporter array. **With no included changes, it runs all tests.** For CI-only selection, use `{ enabled: Boolean(process.env.CI) }` instead.
+`defineConfigWithJev(jevOptions, playwrightConfig)` keeps your Playwright settings and other reporters. For CI-only selection, use `{ enabled: process.env.CI === 'true' || process.env.CI === '1' }` instead of `enabled: true`.
+
+> **A green run can execute zero E2E tests.** If Jev selects none, Playwright reports them as skipped and can exit successfully. Check the `Selected 0/N tests` message. Compare selections with full-suite results before relying on them for required CI checks. If selection fails or no included changes are found, the reporter runs all tests.
 
 <br />
 
@@ -71,6 +75,12 @@ Playwright discovers tests first, respecting your project and test filters. Then
 1. Reads staged, unstaged, and untracked changes locally, or [chooses a CI baseline](#use-it-in-ci).
 2. Always includes directly changed specs. Jev scores the remaining tests against the change using their titles and file paths.
 3. Runs tests at or above `threshold` (default `0.55`). If selection cannot be completed, it runs the full suite.
+
+Each score is Jev's estimated **probability that the change could affect that test's behavior or setup**. TypeSafe describes these probabilities as [calibrated in aggregate](https://docs.typesafe.ai/confidence), but a score is not the probability that a test will fail or a guarantee that other tests cannot be affected. Start with the default threshold, compare selections against full-suite results for your own changes, then tune it. A higher threshold runs fewer tests but increases the chance of missing one.
+
+<br />
+
+## Control what Jev sees
 
 ### Include test source (optional)
 
@@ -91,7 +101,9 @@ export default defineConfigWithJev(
 );
 ```
 
-Globs match repository-relative changed paths, not test titles. Exclusions take precedence, but a directly changed spec still runs. Source excerpts and diffs go to your configured provider. For example, if documentation cannot affect your app, add `exclude: ['**/*.md', '**/*.mdx']`. If every changed path is excluded, the full suite runs.
+### Filter changed files
+
+`include` and `exclude` match repository-relative **changed paths**, not test titles. Exclusions win, but a directly changed spec still runs. For example, with `exclude: ['docs/**']`, a change to `docs/README.md` and `e2e/login.spec.ts` still runs the changed login spec. If every changed path is excluded, the full suite runs. Only exclude Markdown when it cannot affect your app; documentation sites may render it.
 
 ### Exclude generated files
 
@@ -102,13 +114,15 @@ pnpm-lock.yaml    linguist-generated=true
 src/generated/**  linguist-generated=true
 ```
 
-Git reads the effective attribute, including rules in nested `.gitattributes` files. Marked files stay in the changed-file inventory, but their paths and patches are omitted from Jev's context. Directly changed Playwright specs still run. If **only** generated files changed, the full suite runs. Set `excludeGeneratedFiles: false` (or `JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES=false`) to include their diffs.
+Git reads the attribute, including rules in nested `.gitattributes` files. Marked files remain in the **changed-file inventory**, which the reporter uses to identify directly changed specs and decide whether it has usable changes. Their paths and patches are excluded from the input sent to Jev. A changed spec still runs; if **only** generated files changed, the full suite runs. Set `excludeGeneratedFiles: false` (or `JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES=false`) to include their diffs.
 
 The attribute lookup happens when `getGitChanges()` reads the repository. If you supply your own `Changes` object to `selectTests()`, filter its `diff` and `patches` yourself.
 
 The same [`linguist-generated` attribute](https://github.com/github-linguist/linguist/blob/main/docs/overrides.md#generated-code) tells GitHub to hide generated files in diff views. Other Git hosts may present those files differently; selection uses Git's attributes, not a provider API.
 
-Git uses `--unified=3` and ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
+### Preserve whitespace changes
+
+Git ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
 
 ```ts
 export default defineConfigWithJev(
@@ -126,11 +140,9 @@ export default defineConfigWithJev(
 
 `diff.whitespace` controls what Git **ignores**. The default `'all'` ignores whitespace-only changes; `'change'` ignores differences in the amount of whitespace; `'eol'` ignores end-of-line whitespace; `'none'` preserves all whitespace changes. Use `'none'` for CSS, HTML, or templates where spacing can matter. Changed-file detection and directly changed specs are unaffected.
 
-TypeSafe documents **32k tokens for state plus the longest question** and **64k per request**. The selector fits tests within those limits and makes up to **five requests concurrently** by default. Set `limits.maxConcurrentRequests` for your provider; OpenRouter users should set `limits.requestTokens: 32000` for its documented 32k context. `beforeRequest` hooks may run concurrently.
+<br />
 
-If no test meets the threshold, Playwright marks the tests as skipped and exits successfully if nothing else fails. Directly changed specs still run. A missing git ref, provider error, or incomplete answer runs the **full suite** instead. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>`. Compare selections with full-suite results before relying on reduced CI runs.
-
-### Smart diff selection
+## Smart diff selection
 
 Jev sees changed files, their add/modify/delete/rename status, and the git patch. Each test question includes its title, relative path, and optional source body. Available PR title and description provide additional context; otherwise CI can use the commit message. Set `prTitle` or `prDescription` to override those hints.
 
@@ -139,17 +151,35 @@ Descriptions are converted to plain text and limited to 2,000 characters; titles
 | Change                                                                           | Context sent to Jev                                                                           |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Patch fits                                                                       | All changed paths and the full patch are sent together.                                       |
-| Patch exceeds the request budget                                                 | Every file's patch is evaluated in chunks. A test is selected if any chunk finds it relevant. |
+| Patch exceeds the request budget                                                 | Every file's patch is evaluated in chunks. A test runs if any chunk finds it relevant.        |
 | Only discovered specs changed                                                    | No Jev call; those specs run directly.                                                        |
 | One file's patch cannot fit, a request fails, or `limits.maxRequests` is reached | Full discovered suite runs.                                                                   |
 
-The reporter skips all tests only after **every** required chunk is evaluated. Programmatic callers supplying an oversized diff must also supply per-file `patches`; otherwise the full suite runs.
-
-To inspect selection, run with `DEBUG=jev-playwright:*`. Logs show changed paths and a short summary per request: context size, candidate count, model usage, selected count, the highest-scoring 10% and lowest-scoring 5% of selected tests, and the highest- and lowest-scoring 5% of excluded tests (at least five from each group when available). They do not dump patches or every prompt/score. Use `DEBUG=jev-playwright:batch` for request summaries only, or `jev-playwright:source` to investigate omitted test bodies.
+For a large change, the selector takes each test's **highest score across chunks** and compares it with `threshold`. For example, if the checkout chunk finds a test relevant but the billing chunk does not, that test still runs. No tests run only if every required chunk was evaluated successfully and none found a relevant test. Programmatic callers supplying an oversized diff must also supply per-file `patches`; otherwise the full suite runs.
 
 <br />
 
-## Choose a Jev provider
+## Request limits
+
+TypeSafe documents two input budgets: **32k tokens** for the shared change state plus the longest test question, and **64k tokens** for the state plus all questions in one request. The selector sizes requests conservatively using UTF-8 bytes, which can split them earlier than Jev requires.
+
+`limits.requestTokens` controls when tests or file patches are split. `limits.maxRequests` defaults to `100` across the entire selection; exceeding it runs the full suite. At most **five requests** run concurrently by default (`limits.maxConcurrentRequests`). OpenRouter documents a 32k total context, so set `limits.requestTokens: 32000` there. `beforeRequest` hooks may run concurrently.
+
+<br />
+
+## Outcomes and fallbacks
+
+| Outcome | What Playwright does |
+| --- | --- |
+| Some tests selected | Runs them, plus any directly changed specs. |
+| Complete selection finds no relevant tests | Marks tests as skipped; the command can exit **0 without running an E2E test**. |
+| No usable changes, missing git baseline, oversized single patch, provider failure, or incomplete answer | Runs the full discovered suite. |
+
+Look for `Selected N/M tests` or `Running all tests: <reason>` in the reporter output. To assess missed coverage, compare selections with full-suite runs before making a reduced run a required CI check.
+
+<br />
+
+## Choose an AI provider
 
 ### TypeSafe (default)
 
@@ -200,11 +230,20 @@ export default defineConfigWithJev(
 
 ## Use it in CI
 
-With no explicit `baseRef`, the reporter inspects the CI runner's environment and local event payload. It makes **no provider API calls and never fetches git history**. A PR or feature branch compares `HEAD` with the merge-base of its target/default branch. On a default-branch push, a previous-push SHA, when available, covers _every commit in that push_, including squash and merge commits.
+With no explicit `baseRef`, the reporter uses CI environment variables and local event data to choose what to compare with `HEAD`. It makes **no CI-provider API calls and never fetches git history**.
 
-The checkout must contain `refs/remotes/origin/<target>` and sufficient history for branch comparisons. For example, configure a GitHub Actions checkout with `fetch-depth: 0`. If the baseline is missing, the full suite runs.
+| Run | Baseline | If unavailable |
+| --- | --- | --- |
+| Local | Staged, unstaged, and untracked changes | Full suite when no included changes exist |
+| Pull/merge request | Merge-base with the target branch | Full suite |
+| Feature branch | Merge-base with the default branch | Full suite |
+| Default-branch push on GitHub, Gitea, or GitLab | Previous push SHA, covering all pushed commits | Full suite |
+| Default-branch build on Bitbucket or Azure | No previous-push SHA available automatically | Full suite unless `BASE_REF` is set |
+| Tag or unrecognized CI run | No baseline | Full suite |
 
-An explicit `baseRef`, `JEV_PLAYWRIGHT_BASE_REF`, or `BASE_REF` overrides detection. For example, `BASE_REF=origin/main pnpm exec playwright test` compares their merge-base with `HEAD`. Outside CI, no provider detection runs.
+Branch comparisons need the target branch and enough history in the checkout, such as `fetch-depth: 0` with GitHub Actions.
+
+An explicit `baseRef`, `JEV_PLAYWRIGHT_BASE_REF`, or `BASE_REF` overrides detection. For example: `BASE_REF=origin/main pnpm exec playwright test`. Outside CI, no CI-provider detection runs.
 
 <details>
 <summary><strong>GitHub Actions</strong></summary>
@@ -247,13 +286,18 @@ If a provider cannot supply the default branch, `main` is assumed. Set `defaultB
 
 ## Customize the decision
 
-Use `createQuestion` to change the relevance instructions. Use `beforeRequest` to add project context to each typed SDK request:
+Use `relevanceGuidance` for a shared rule sent once per request, and `relevanceCriteria` to customize either yes/no outcome on every typed question. Use `createQuestion` to change the per-test instructions, or `beforeRequest` to add project context:
 
 ```ts
 export default defineConfigWithJev(
   {
     enabled: true,
     prTitle: process.env.PR_TITLE,
+    relevanceGuidance: 'Consider indirect changes through shared billing services.',
+    relevanceCriteria: {
+      true: 'May affect billing test setup, execution, or assertions.',
+      false: 'No plausible effect on billing test setup, execution, or assertions.'
+    },
     createQuestion(test, key) {
       return `Could this change affect the behavior tested by ${key} (${test.title})?`;
     },
@@ -269,7 +313,7 @@ export default defineConfigWithJev(
 );
 ```
 
-`beforeRequest` may be async. Keep every `test_N` question or the full suite runs. Test details are appended to `createQuestion` output. Keep `createQuestion` deterministic because request sizing can call it more than once.
+`relevanceCriteria` accepts partial overrides: omitted outcomes retain their defaults. Keep shared guidance concise because it is sent once per request; criteria are repeated for every test. `beforeRequest` may be async. Keep every `test_N` question or the full suite runs. Test details are appended to `createQuestion` output. Keep `createQuestion` deterministic because request sizing can call it more than once.
 
 <br />
 
@@ -308,7 +352,32 @@ console.log(
 );
 ```
 
-`id` must be unique in the supplied catalog. `assessments` contains each judged test's probability and resolved model. `selectedIds: []` with no `fallbackReason` means a complete Jev decision selected no tests; a `fallbackReason` means all tests were retained. You can pass `client` to `selectTests()` to reuse a configured SDK client. `getGitChanges(cwd, baseRef?)` reads git changes for you; `detectCiDiff()` and `resolveConfig()` are available if your application owns the CI integration.
+The inputs and result have these shapes:
+
+- `changes.files` is a list of repository-relative paths. `diff`, `title`, and `description` are optional. Use `getGitChanges(cwd, baseRef?)` to gather git changes; it also returns file statuses and per-file patches for large diffs.
+- `tests` is the discovered test catalog. Each entry needs a unique `id`, `file`, and `title`; `project`, `source`, `line`, and `column` are optional.
+- `selectedIds` contains tests to run. `assessments` contains each scored test's relevance probability and model ID. `selectedIds: []` **without** `fallbackReason` means a complete decision found no tests; **with** `fallbackReason`, all test IDs are returned.
+
+Pass `client` to reuse a configured TypeSafe SDK client. `detectCiDiff()` and `resolveConfig()` are also exported for custom integrations.
+
+<br />
+
+## Inspect decisions
+
+Run with `DEBUG=jev-playwright:batch,jev-playwright:selection` for compact request and combined selection summaries. Use `DEBUG=jev-playwright:request` to inspect the full state and question list actually sent after `beforeRequest`, `DEBUG=jev-playwright:config` for resolved options (the provider key and configured client are masked), or `DEBUG=jev-playwright:*` for everything. Example (abbreviated):
+
+```text
+jev-playwright:batch request 1: candidates=68, contextBytes=8200
+jev-playwright:batch request 1 result { model: 'typesafe/jev-1.13', selected: 4, total: 68 }
+jev-playwright:selection selection result {
+  selected: 4, excluded: 64, threshold: 0.55,
+  topSelected: [{ title: 'customer checks out', location: 'e2e/checkout.spec.ts:12:3', probability: 0.91 }],
+  topExcluded: [{ title: 'customer signs in', location: 'e2e/login.spec.ts:28:3', probability: 0.54 }]
+}
+[jev-playwright] Selected 4/68 tests
+```
+
+The selection result combines all batches and diff chunks, using each test's highest score across chunks. It samples the highest 10% and lowest 5% of selected tests and the highest and lowest 5% of excluded tests (at least five from each group when available). Locations use clickable `file:line:column` paths relative to the configured `cwd`, or absolute paths for tests outside it; programmatic tests without a line show the file alone. Directly changed specs run without a score and are not included in the samples. Each question uses explicit yes/no relevance criteria. For missing test bodies, use `DEBUG=jev-playwright:source,jev-playwright:test-body`.
 
 <br />
 
@@ -335,6 +404,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `limits.maxConcurrentRequests`              | `JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS`              | `5`                                                           |
 | `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `true`                                                        |
 | `perProject`                                | `JEV_PLAYWRIGHT_PER_PROJECT`                                 | `false` (share decisions across projects)                     |
+| `relevanceGuidance`, `relevanceCriteria`     | Playwright config only                                       | Shared direct/indirect guidance; yes/no test relevance        |
 | `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                                       |
 | `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                                                  |
 | `prTitle`, `prDescription`                  | `JEV_PLAYWRIGHT_PR_TITLE`, `JEV_PLAYWRIGHT_PR_DESCRIPTION`   | unset                                                         |
