@@ -1,9 +1,12 @@
 {
   "name": "jev-playwright",
-  "version": "0.2.2",
-  "description": "Type-aware unused i18next dictionary linter for TypeScript and JSON dictionaries.",
+  "version": "0.0.1",
+  "description": "Jev-powered Playwright test selection (coming soon).",
   "keywords": [
-    "TODO"
+    "playwright",
+    "jev",
+    "test-selection",
+    "e2e"
   ],
   "homepage": "https://github.com/arthurfiorette/jev-playwright#readme",
   "bugs": {
@@ -48,5 +51,8 @@
       "onFail": "error",
       "version": ">=24.16"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
