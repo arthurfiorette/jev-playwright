@@ -1,7 +1,17 @@
 import { matchesGlob } from 'node:path';
 import type { SystemOneRequest, TypeSafeClient } from '@typesafe-ai/sdk';
+import createDebug from 'debug';
 import type { Changes } from './git.js';
 import type { TestDescriptor } from './selection.js';
+
+const debug = createDebug('jev-playwright:config');
+
+const defaultRelevanceGuidance =
+  'Relevance includes direct effects and indirect effects via dependencies such as page objects or shared services.';
+const defaultRelevanceCriteria = {
+  true: 'May affect test setup, execution, or assertions.',
+  false: 'No plausible effect on test setup, execution, or assertions.'
+};
 
 /** Jev context budgets used for conservative request sizing. */
 export interface JevRequestLimits {
@@ -59,6 +69,10 @@ export interface JevPlaywrightConfig {
   maxTestSourceTokens?: number;
   /** Judge the same test separately per Playwright project/browser. @default false */
   perProject?: boolean;
+  /** Shared guidance sent once in the model state for each request. @default 'Relevance includes direct effects and indirect effects via dependencies such as page objects or shared services.' */
+  relevanceGuidance?: string;
+  /** Per-test yes/no meanings; either outcome can be overridden. @default { true: 'May affect test setup, execution, or assertions.', false: 'No plausible effect on test setup, execution, or assertions.' } */
+  relevanceCriteria?: { true?: string; false?: string };
   /** Pin this model when tuning a threshold. @default 'jev-latest' */
   model?: string;
   /** SDK API root for custom providers. @default TypeSafe SDK base URL */
@@ -93,6 +107,7 @@ export interface ResolvedConfig
       | 'providerKey'
       | 'limits'
       | 'diff'
+      | 'relevanceCriteria'
       | 'client'
       | 'createQuestion'
       | 'beforeRequest'
@@ -106,6 +121,7 @@ export interface ResolvedConfig
   providerKey: string | undefined;
   limits: Required<JevRequestLimits>;
   diff: Required<JevDiffConfig>;
+  relevanceCriteria: { true: string; false: string };
   client: JevPlaywrightConfig['client'];
   createQuestion: JevPlaywrightConfig['createQuestion'];
   beforeRequest: JevPlaywrightConfig['beforeRequest'];
@@ -154,6 +170,16 @@ function parseGlobs(raw: string | undefined, key: string): string[] | undefined 
 }
 
 function validateConfig(config: ResolvedConfig): ResolvedConfig {
+  if (
+    typeof config.relevanceGuidance !== 'string' ||
+    !config.relevanceGuidance.trim() ||
+    typeof config.relevanceCriteria.true !== 'string' ||
+    !config.relevanceCriteria.true.trim() ||
+    typeof config.relevanceCriteria.false !== 'string' ||
+    !config.relevanceCriteria.false.trim()
+  ) {
+    throw new Error('relevanceGuidance and relevanceCriteria must be non-empty strings');
+  }
   if (!['all', 'change', 'eol', 'none'].includes(config.diff.whitespace)) {
     throw new Error('diff.whitespace must be all, change, eol, or none');
   }
@@ -200,7 +226,7 @@ export function resolveConfig(
   config: JevPlaywrightConfig = {},
   env: NodeJS.ProcessEnv = process.env
 ): ResolvedConfig {
-  return validateConfig({
+  const resolved = validateConfig({
     enabled:
       parseBoolean(readEnv(env, 'ENABLED'), 'JEV_PLAYWRIGHT_ENABLED') ?? config.enabled ?? false,
     baseRef: readEnv(env, 'BASE_REF') ?? env.BASE_REF ?? config.baseRef,
@@ -277,6 +303,8 @@ export function resolveConfig(
       parseBoolean(readEnv(env, 'PER_PROJECT'), 'JEV_PLAYWRIGHT_PER_PROJECT') ??
       config.perProject ??
       false,
+    relevanceGuidance: config.relevanceGuidance ?? defaultRelevanceGuidance,
+    relevanceCriteria: { ...defaultRelevanceCriteria, ...config.relevanceCriteria },
     model: readEnv(env, 'MODEL') ?? config.model ?? 'jev-latest',
     providerUrl: readEnv(env, 'PROVIDER_URL') ?? config.providerUrl,
     providerKey: readEnv(env, 'PROVIDER_KEY') ?? config.providerKey,
@@ -286,6 +314,14 @@ export function resolveConfig(
     createQuestion: config.createQuestion,
     beforeRequest: config.beforeRequest
   });
+  if (debug.enabled) {
+    debug('resolved config %O', {
+      ...resolved,
+      providerKey: resolved.providerKey ? '[redacted]' : undefined,
+      client: resolved.client ? '[configured client]' : undefined
+    });
+  }
+  return resolved;
 }
 
 /** Filter changed paths before building model context. */

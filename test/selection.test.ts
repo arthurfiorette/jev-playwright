@@ -51,6 +51,8 @@ test('config precedence, glob filtering, and validation', () => {
     false
   );
   assert.equal(config.perProject, false);
+  assert.match(config.relevanceGuidance, /indirect effects/);
+  assert.match(config.relevanceCriteria.true, /setup, execution, or assertions/);
   assert.equal(config.excludeGeneratedFiles, true);
   assert.equal(
     resolveConfig({}, { JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES: 'false' }).excludeGeneratedFiles,
@@ -86,6 +88,7 @@ test('config precedence, glob filtering, and validation', () => {
   );
   assert.throws(() => resolveConfig({}, { JEV_PLAYWRIGHT_THRESHOLD: 'nope' }), /must be a number/);
   assert.throws(() => resolveConfig({ limits: { requestTokens: 0 } }), /limits/);
+  assert.throws(() => resolveConfig({ relevanceCriteria: { true: '' } }, {}), /relevanceCriteria/);
   assert.equal(
     resolveConfig(
       { limits: { requestTokens: 64_000 } },
@@ -331,6 +334,55 @@ test('custom question and beforeRequest hook customize the SDK request', async (
   assert.deepEqual(response.selectedIds, ['a']);
 });
 
+test('shared relevance guidance and each criterion are configurable independently', () => {
+  const config = resolveConfig(
+    {
+      relevanceGuidance: 'Only changes to billing can matter.',
+      relevanceCriteria: { true: 'Billing path affected.' }
+    },
+    {}
+  );
+  const request = createRequest([tests[0]!], { files: ['src/billing.ts'] }, config);
+  assert.match(String(request.state), /Only changes to billing can matter/);
+  assert.doesNotMatch(String(request.state), /Relevance includes direct effects/);
+  const question = request.questions.test_0;
+  assert.equal(question?.type, 'noul');
+  if (question?.type !== 'noul') throw new Error('Expected a noul question');
+  assert.equal(question.criteria?.true, 'Billing path affected.');
+  assert.equal(question.criteria?.false, config.relevanceCriteria.false);
+});
+
+test('relevance criteria stay within a small per-test request budget', () => {
+  const catalog = Array.from({ length: 60 }, (_, index) => ({
+    id: `test-${index}`,
+    file: `/repo/e2e/flow-${index}.spec.ts`,
+    title: `flow ${index}`
+  }));
+  const request = createRequest(
+    catalog,
+    { files: ['src/flow.ts'] },
+    resolveConfig({ cwd: '/repo' }, {})
+  );
+  const original = {
+    ...request,
+    state: String(request.state).replace(/^Relevance includes.*\n/m, ''),
+    questions: Object.fromEntries(
+      Object.entries(request.questions).map(([key, question]) => [
+        key,
+        {
+          type: question.type,
+          instructions: String(question.instructions).replace(
+            'Is this test relevant?',
+            'Could this change affect the assertions or setup of the test below, directly or indirectly?'
+          )
+        }
+      ])
+    )
+  };
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  assert.ok(bytes(request) - bytes(original) <= catalog.length * 80);
+});
+
 test('environment overrides config for provider and selection options', () => {
   const config = resolveConfig(
     { providerUrl: 'https://direct.example', enabled: false },
@@ -384,6 +436,15 @@ test('string state keeps compact statuses and bounded human hints', () => {
     String(request.questions.test_0?.instructions),
     /Test:test_0\|chromium\|e2e\/a\.spec\.ts\|checkout/
   );
+  const question = request.questions.test_0;
+  assert.equal(question?.type, 'noul');
+  if (question?.type !== 'noul') throw new Error('Expected a noul question');
+  assert.match(String(question.criteria?.true), /setup, execution, or assertions/);
+  assert.match(
+    String(question.criteria?.false),
+    /No plausible effect.*setup, execution, or assertions/
+  );
+  assert.match(state, /Relevance includes direct effects and indirect effects via dependencies/);
   assert.match(state, /Patch:\n\+updated payments/);
   assert.ok(state.length < 3_000);
 });

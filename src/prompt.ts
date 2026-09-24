@@ -57,7 +57,7 @@ function testLocation(test: TestDescriptor, cwd: string): string {
 
 /** Keep the default question focused on the test metadata supplied alongside it. */
 export function defaultQuestion(_test: TestDescriptor, _key: string): string {
-  return 'Could this change affect the assertions or setup of the test below, directly or indirectly?';
+  return 'Is this test relevant?';
 }
 
 function testQuestion(test: TestDescriptor, key: string, config: ResolvedConfig): string {
@@ -88,7 +88,7 @@ export function createRequest(
 
   for (const [index, test] of batch.entries()) {
     const key = `test_${index}`;
-    questions[key] = noul(testQuestion(test, key, config));
+    questions[key] = noul(testQuestion(test, key, config), config.relevanceCriteria);
   }
 
   const title = titleHint(config.prTitle ?? changes.title);
@@ -99,6 +99,8 @@ export function createRequest(
     state: [
       ...(title ? [`Title: ${title}`] : []),
       ...(description ? [`Description: ${description}`] : []),
+      // Keep shared decision guidance out of the per-test questions to avoid multiplying request size.
+      config.relevanceGuidance,
       'Changed files (status and path):',
       ...changedPaths(changes),
       ...(changes.diff ? ['Patch:', changes.diff] : [])

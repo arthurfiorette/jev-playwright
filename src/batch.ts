@@ -7,6 +7,7 @@ import { fitsRequestLimits } from './request-limits.js';
 import type { Assessment, TestDescriptor } from './selection.js';
 
 const debug = createDebug('jev-playwright:batch');
+const requestDebug = createDebug('jev-playwright:request');
 
 interface PlannedBatch {
   tests: TestDescriptor[];
@@ -19,23 +20,6 @@ interface BatchQueue {
   results: Assessment[][];
 }
 
-function sampleAssessments(
-  entries: Assessment[],
-  titles: Map<string, string>,
-  portion: number,
-  direction: 'top' | 'bottom'
-): Array<{ title: string | undefined; probability: number }> {
-  return entries
-    .toSorted((a, b) =>
-      direction === 'top' ? b.probability - a.probability : a.probability - b.probability
-    )
-    .slice(0, Math.max(5, Math.ceil(entries.length * portion)))
-    .map((assessment) => ({
-      title: titles.get(assessment.id),
-      probability: assessment.probability
-    }));
-}
-
 function logBatchResult(
   requestNumber: number,
   tests: TestDescriptor[],
@@ -46,19 +30,11 @@ function logBatchResult(
 ): void {
   if (!debug.enabled) return;
 
-  const selected = assessments.filter((assessment) => assessment.probability >= threshold);
-  const excluded = assessments.filter((assessment) => assessment.probability < threshold);
-  const titles = new Map(tests.map((test) => [test.id, test.title]));
-
   debug('request %d result %O', requestNumber, {
     model,
     ...(inputTokens === undefined ? {} : { inputTokens }),
-    selected: selected.length,
-    total: tests.length,
-    topSelected: sampleAssessments(selected, titles, 0.1, 'top'),
-    bottomSelected: sampleAssessments(selected, titles, 0.05, 'bottom'),
-    topExcluded: sampleAssessments(excluded, titles, 0.05, 'top'),
-    bottomExcluded: sampleAssessments(excluded, titles, 0.05, 'bottom')
+    selected: assessments.filter((assessment) => assessment.probability >= threshold).length,
+    total: tests.length
   });
 }
 
@@ -148,6 +124,18 @@ async function assessBatch(
       requestNumber,
       tests.length,
       Buffer.byteLength(JSON.stringify(prepared.state), 'utf8')
+    );
+  }
+  if (requestDebug.enabled) {
+    requestDebug(
+      'request %d state\n%s',
+      requestNumber,
+      typeof prepared.state === 'string' ? prepared.state : JSON.stringify(prepared.state, null, 2)
+    );
+    requestDebug(
+      'request %d questions\n%s',
+      requestNumber,
+      JSON.stringify(prepared.questions, null, 2)
     );
   }
   const response = await client.systemOne(prepared);

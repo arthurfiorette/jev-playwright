@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { inspect } from 'node:util';
 import { TypeSafeClient } from '@typesafe-ai/sdk';
 import createDebug from 'debug';
 import { runBatches } from './batch.js';
@@ -214,6 +215,59 @@ async function assessEveryChange(
   });
 }
 
+function sampleAssessments(
+  entries: Assessment[],
+  tests: Map<string, TestDescriptor>,
+  cwd: string,
+  portion: number,
+  direction: 'top' | 'bottom'
+): Array<{ title: string; location: string; project?: string; probability: number }> {
+  return entries
+    .toSorted((a, b) =>
+      direction === 'top' ? b.probability - a.probability : a.probability - b.probability
+    )
+    .slice(0, Math.max(5, Math.ceil(entries.length * portion)))
+    .map((assessment) => {
+      const test = tests.get(assessment.id);
+      if (!test) throw new Error(`Missing test for Jev answer ${assessment.id}`);
+      const absolute = resolve(cwd, test.file);
+      const path = relative(cwd, absolute);
+      const locationPath =
+        path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path) ? absolute : path;
+      return {
+        title: test.title,
+        location:
+          test.line === undefined
+            ? locationPath
+            : `${locationPath}:${test.line}:${test.column ?? 1}`,
+        ...(test.project ? { project: test.project } : {}),
+        probability: assessment.probability
+      };
+    });
+}
+
+function logSelectionResult(
+  candidates: TestDescriptor[],
+  assessments: Assessment[],
+  config: ResolvedConfig
+): void {
+  if (!debug.enabled) return;
+
+  const selected = assessments.filter((assessment) => assessment.probability >= config.threshold);
+  const excluded = assessments.filter((assessment) => assessment.probability < config.threshold);
+  const tests = new Map(candidates.map((test) => [test.id, test]));
+  const result = {
+    selected: selected.length,
+    excluded: excluded.length,
+    threshold: config.threshold,
+    topSelected: sampleAssessments(selected, tests, config.cwd, 0.1, 'top'),
+    bottomSelected: sampleAssessments(selected, tests, config.cwd, 0.05, 'bottom'),
+    topExcluded: sampleAssessments(excluded, tests, config.cwd, 0.05, 'top'),
+    bottomExcluded: sampleAssessments(excluded, tests, config.cwd, 0.05, 'bottom')
+  };
+  debug('selection result %s', inspect(result, { depth: null, maxArrayLength: Infinity }));
+}
+
 function buildSelection(
   tests: TestDescriptor[],
   forced: Set<string>,
@@ -273,12 +327,15 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
         ? { statuses: input.changes.statuses.filter((entry) => modelFiles.includes(entry.path)) }
         : {})
     };
+    const representatives = groups.map((group) => group.representative);
     const assessments = await assessEveryChange(
-      groups.map((group) => group.representative),
+      representatives,
       changes,
       config,
       sdkClient(input, config)
     );
+    // Sample final scores once, after merging diff chunks and before expanding shared project decisions.
+    logSelectionResult(representatives, assessments, config);
     return buildSelection(input.tests, forced, expandAssessments(groups, assessments), config);
   } catch (error) {
     // A partial batch cannot safely exclude candidates that were never evaluated.
