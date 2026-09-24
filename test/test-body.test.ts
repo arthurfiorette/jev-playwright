@@ -51,10 +51,29 @@ test('same-line tests use their source columns and expression callbacks', () => 
 
   assert.equal(bodies.get(0), '1');
   assert.equal(bodies.get(1), '2');
-  assert.throws(
-    () => extractTestBodies('scenario.spec.ts', source, [{ index: 0, line: 1 }]),
-    /Cannot locate test callback/
-  );
+  assert.equal(extractTestBodies('scenario.spec.ts', source, [{ index: 0, line: 1 }]).size, 0);
+});
+
+test('Playwright member-call columns match fixme, only, and skip without adjacent comments', () => {
+  const source = [
+    '/** A quarantined download test. */',
+    "test.fixme('download', async ({ app }) => { await app.download(); });",
+    "test.only('focused', () => { expect(true); });",
+    "test.skip('disabled', () => { expect(false); });"
+  ].join('\n');
+  const locations = [
+    { index: 0, line: 2, column: 6 },
+    { index: 1, line: 3, column: 6 },
+    { index: 2, line: 4, column: 6 }
+  ];
+  const bodies = extractTestBodies('scenario.spec.ts', source, locations);
+
+  assert.match(bodies.get(0) ?? '', /quarantined download test/);
+  assert.match(bodies.get(0) ?? '', /await app\.download\(\)/);
+  assert.doesNotMatch(bodies.get(0) ?? '', /test\.fixme\('download'/);
+  assert.match(bodies.get(1) ?? '', /expect\(true\)/);
+  assert.match(bodies.get(2) ?? '', /expect\(false\)/);
+  assert.doesNotMatch(bodies.get(1) ?? '', /quarantined download test/);
 });
 
 test('leading comments stop at blank lines and previous test trailing comments', () => {
@@ -83,16 +102,25 @@ test('project instances at the same location share the same extracted body', () 
   assert.match(bodies.get(0) ?? '', /expect\(true\)/);
 });
 
-test('parse errors or unmatched callbacks fail instead of leaking neighboring code', () => {
+test('a callback without an unambiguous match is omitted without leaking neighboring code', () => {
   const broken = "test('broken', () => {";
   assert.throws(
     () => extractTestBodies('broken.spec.ts', broken, [location(broken, 'test(', 0)]),
     /Cannot parse/
   );
 
-  const indirect = "test('scenario', runScenario);";
-  assert.throws(
-    () => extractTestBodies('indirect.spec.ts', indirect, [location(indirect, 'test(', 0)]),
-    /Cannot locate test callback/
-  );
+  const source = [
+    "test('first', () => { expect(1); });",
+    "test('indirect', runScenario);",
+    "test('third', () => { expect(3); });"
+  ].join('\n');
+  const bodies = extractTestBodies('indirect.spec.ts', source, [
+    location(source, "test('first'", 0),
+    location(source, "test('indirect'", 1),
+    location(source, "test('third'", 2)
+  ]);
+
+  assert.match(bodies.get(0) ?? '', /expect\(1\)/);
+  assert.equal(bodies.has(1), false);
+  assert.match(bodies.get(2) ?? '', /expect\(3\)/);
 });

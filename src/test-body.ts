@@ -1,4 +1,5 @@
 import { parseSync, Visitor } from 'oxc-parser';
+import { selectionDebug } from './debug.js';
 
 /** Location of a Playwright-discovered test, indexed into its matching descriptor. */
 export interface TestLocation {
@@ -50,7 +51,7 @@ function precedingComments(
   return found;
 }
 
-/** Extract only each discovered test callback body and its immediately preceding comments. */
+/** Extract matching callback bodies and leading comments, omitting tests with no unambiguous match. */
 export function extractTestBodies(
   file: string,
   source: string,
@@ -61,7 +62,7 @@ export function extractTestBodies(
 
   const starts = lineStarts(source);
   const lines = new Set(locations.map((location) => location.line));
-  const bodies = new Map<number, Array<{ column: number; text: string }>>();
+  const bodies = new Map<number, Array<{ columns: number[]; text: string }>>();
 
   new Visitor({
     CallExpression(call) {
@@ -81,7 +82,13 @@ export function extractTestBodies(
       const comments = precedingComments(source, parsed.comments, call.start);
       const text = [...comments, code].join('\n').trim();
       const entries = bodies.get(line) ?? [];
-      entries.push({ column: call.start - (starts[line - 1] ?? 0) + 1, text });
+      const lineStart = starts[line - 1] ?? 0;
+      const columns = [call.start - lineStart + 1];
+      // Playwright locates `test.fixme`/`test.only` at the member, not at `test`.
+      if (call.callee.type === 'MemberExpression') {
+        columns.push(call.callee.property.start - lineStart + 1);
+      }
+      entries.push({ columns, text });
       bodies.set(line, entries);
     }
   }).visit(parsed.program);
@@ -91,11 +98,17 @@ export function extractTestBodies(
     const matches =
       bodies
         .get(location.line)
-        ?.filter((body) => location.column === undefined || body.column === location.column) ?? [];
+        ?.filter(
+          (body) => location.column === undefined || body.columns.includes(location.column)
+        ) ?? [];
     if (matches.length !== 1) {
-      throw new Error(
-        `Cannot locate test callback at ${file}:${location.line}:${location.column ?? '?'}`
+      selectionDebug(
+        'source omitted: cannot locate test callback at %s:%d:%s',
+        file,
+        location.line,
+        location.column ?? '?'
       );
+      continue;
     }
     result.set(location.index, matches[0]?.text ?? '');
   }

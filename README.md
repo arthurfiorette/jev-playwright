@@ -72,9 +72,17 @@ Playwright discovers tests first, applying its usual project, grep, and `.only` 
 2. Always runs directly changed specs. It omits those specs from Jev's candidate tests and git patch context. Other changed files, including shared E2E fixtures, remain in context.
 3. Packs as many candidates as fit into each Jev request. By default, the same test across Playwright projects shares one typed yes/no question containing its title and file path **relative to `cwd`**; the git patch stays in the shared state. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
 
-Test bodies are **not sent by default**; each question still includes its test title and file. Set `includeTestSource: true` to send that test's callback body plus any immediately preceding `/** */` or `//` comments. The source extractor uses `oxc-parser` to locate the body, so it excludes the `test('title', ...)` wrapper and the next test's JSDoc. This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. If the spec cannot be parsed or a discovered test's callback cannot be located, the reporter runs the full suite. Each excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
+### Include test source (optional)
 
-`perProject` defaults to `false`: one decision for a test at the same file, title, and source location is applied to its Chromium, Firefox, or WebKit instances. Set `perProject: true` if browser-specific behavior changes relevance; then each question includes its project name and is judged separately. Test IDs and assessments are returned for every Playwright instance in either mode. Question metadata uses compact `|` separators and avoids repeating absolute checkout paths; title words and git patch contents stay intact.
+Test bodies are **not sent by default**. Each question still includes its test title and relative file path. Set `includeTestSource: true` when those are not enough to judge relevance.
+
+- **What Jev sees:** `oxc-parser` extracts the test callback body and immediately preceding `/** */` or `//` comments. It leaves out the `test('title', ...)` wrapper and the next test's JSDoc. This exposes assertions and POM calls, but does not follow imports into POM implementations.
+- **How much:** The default cap is 5,000 JavaScript lexical tokens per test, with a secondary 15,000-character cap. Insignificant indentation and repeated blank lines are compacted; strings, comments, and meaningful line breaks stay intact. Lexical tokens are not Jev model tokens, so batches adapt to excerpt size.
+- **When extraction fails:** If a spec cannot be read or parsed, or a callback cannot be matched, only the affected source excerpt is omitted. The test remains a candidate based on its title and path. `DEBUG=jev-playwright:selection` logs omitted sources.
+
+By default, `perProject: false` shares one decision across Chromium, Firefox, and WebKit instances of a test at the same file, title, and location. Set `perProject: true` for browser-specific relevance; then each question includes the project name. Both modes return IDs and assessments for every Playwright instance.
+
+Question metadata uses compact `|` separators and relative paths. Test titles and git patches retain their original content.
 
 ```ts
 export default defineConfigWithJev(

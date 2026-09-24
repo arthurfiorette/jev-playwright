@@ -66,3 +66,49 @@ test('source extraction reaches past 40 lines without including the next test', 
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test('unmatched callbacks and missing or invalid files only lose their own source context', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'jev-optional-source-'));
+  const good = join(cwd, 'good.spec.ts');
+  const bad = join(cwd, 'bad.spec.ts');
+  const missing = join(cwd, 'missing.spec.ts');
+
+  try {
+    await writeFile(
+      good,
+      [
+        "test('first', () => { expect(1); });",
+        "test('indirect', runScenario);",
+        "test('third', () => { expect(3); });"
+      ].join('\n')
+    );
+    await writeFile(bad, "test('broken', () => {");
+
+    const locations = [
+      { file: good, line: 1 },
+      { file: good, line: 2 },
+      { file: good, line: 3 },
+      { file: bad, line: 1 },
+      { file: missing, line: 1 }
+    ];
+    const tests = locations.map((location) => ({ location })) as TestCase[];
+    const descriptors = locations.map((location, index) => ({
+      id: String(index),
+      file: location.file,
+      title: `scenario ${index}`
+    }));
+    const excerpts = await withTestSource(tests, descriptors, 500);
+
+    assert.match(excerpts[0]?.source ?? '', /expect\(1\)/);
+    assert.equal(excerpts[1]?.source, undefined);
+    assert.match(excerpts[2]?.source ?? '', /expect\(3\)/);
+    assert.equal(excerpts[3]?.source, undefined);
+    assert.equal(excerpts[4]?.source, undefined);
+    assert.deepEqual(
+      excerpts.map((excerpt) => excerpt.id),
+      descriptors.map((descriptor) => descriptor.id)
+    );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

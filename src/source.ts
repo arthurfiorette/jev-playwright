@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import type { TestCase } from '@playwright/test/reporter';
 import jsTokens from 'js-tokens';
+import { selectionDebug } from './debug.js';
 import type { TestDescriptor } from './selection.js';
 import type { TestLocation } from './test-body.js';
 import { extractTestBodies } from './test-body.js';
@@ -69,16 +70,23 @@ function groupTests(tests: TestCase[]): FileGroup[] {
 }
 
 async function extractFileSources(group: FileGroup, maxTokens: number): Promise<Excerpt[]> {
-  const info = await stat(group.file);
-  if (info.size > 2_000_000)
-    throw new Error(`Spec too large to read for source context: ${group.file}`);
+  try {
+    const info = await stat(group.file);
+    if (info.size > 2_000_000) throw new Error('spec exceeds the 2 MB source-extraction limit');
 
-  const contents = await readFile(group.file, 'utf8');
-  const bodies = extractTestBodies(group.file, contents, group.tests);
-  return group.tests.map((test) => ({
-    index: test.index,
-    source: limitTestSource(bodies.get(test.index) ?? '', maxTokens)
-  }));
+    const contents = await readFile(group.file, 'utf8');
+    const bodies = extractTestBodies(group.file, contents, group.tests);
+    return group.tests.flatMap((test) => {
+      const body = bodies.get(test.index);
+      return body === undefined
+        ? []
+        : [{ index: test.index, source: limitTestSource(body, maxTokens) }];
+    });
+  } catch (error) {
+    // Source context is optional; keep the test available for title/path-based selection.
+    selectionDebug('source omitted for %s: %O', group.file, error);
+    return [];
+  }
 }
 
 /** Parse up to four specs at once, retaining only bounded test bodies after each read. */
