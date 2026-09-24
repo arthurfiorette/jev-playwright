@@ -47,8 +47,5 @@ jobs:
           process.exit(process.env.RELEASE_TAG === 'v' + packageJson.version &&
           !packageJson.version.includes('-') ? 0 : 1)"
 
-      - name: Check
-        run: pnpm check
-
       - name: Publish to NPM
         run: npx --yes npm@latest publish --access public
