@@ -66,23 +66,17 @@ Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started
 
 ## How selection works
 
-Playwright discovers tests first, applying its usual project, grep, and `.only` filters. The reporter then:
+Playwright discovers tests first, respecting your project and test filters. Then the reporter:
 
-1. Reads the git change set. Locally, this includes staged, unstaged, and untracked files. In CI, it [detects a baseline](#use-it-in-ci).
-2. Always runs directly changed specs. It omits those specs from Jev's candidate tests and git patch context. Other changed files, including shared E2E fixtures, remain in context.
-3. Packs as many candidates as fit into each Jev request. By default, the same test across Playwright projects shares one typed yes/no question containing its title and file path **relative to `cwd`**; the git patch stays in the shared state. Tests meeting `threshold` (default `0.5`) run after Playwright applies sharding.
+1. Reads staged, unstaged, and untracked changes locally, or [chooses a CI baseline](#use-it-in-ci).
+2. Always includes directly changed specs. Jev scores the remaining tests against the change using their titles and file paths.
+3. Runs tests at or above `threshold` (default `0.5`). If selection cannot be completed, it runs the full suite.
 
 ### Include test source (optional)
 
-Test bodies are **not sent by default**. Each question still includes its test title and relative file path. Set `includeTestSource: true` when those are not enough to judge relevance.
+Test bodies are **not sent by default**. Set `includeTestSource: true` to send each test's body and immediately preceding comments, which can help when a title alone doesn't describe its assertions or POM calls. The excerpt is limited to 5,000 JavaScript lexical tokens (and 15,000 characters) per test. If the source is unavailable, Jev can still judge that test by its title and path. It does not read POM implementations.
 
-- **What Jev sees:** `oxc-parser` extracts the test callback body and immediately preceding `/** */` or `//` comments. It leaves out the `test('title', ...)` wrapper and the next test's JSDoc. This exposes assertions and POM calls, but does not follow imports into POM implementations.
-- **How much:** The default cap is 5,000 JavaScript lexical tokens per test, with a secondary 15,000-character cap. Insignificant indentation and repeated blank lines are compacted; strings, comments, and meaningful line breaks stay intact. Lexical tokens are not Jev model tokens, so batches adapt to excerpt size.
-- **When extraction fails:** If a spec cannot be read or parsed, or a callback cannot be matched, only the affected source excerpt is omitted. The test remains a candidate based on its title and path. `DEBUG=jev-playwright:selection` logs omitted sources.
-
-By default, `perProject: false` shares one decision across Chromium, Firefox, and WebKit instances of a test at the same file, title, and location. Set `perProject: true` for browser-specific relevance; then each question includes the project name. Both modes return IDs and assessments for every Playwright instance.
-
-Question metadata uses compact `|` separators and relative paths. Test titles and git patches retain their original content.
+By default, the same test in multiple Playwright projects shares one decision. Set `perProject: true` when Chromium, Firefox, or WebKit could need different selections.
 
 ```ts
 export default defineConfigWithJev(
@@ -97,7 +91,7 @@ export default defineConfigWithJev(
 );
 ```
 
-Globs match repository-relative **changed paths**, not test titles. Exclusions take precedence. A directly changed spec still runs even if its path is excluded from model context. Source excerpts and diffs are sent to your configured provider, so use the filters before enabling source context for sensitive tests. There is no universal safe extension-based exclusion: Markdown can be rendered application content. If your repository's docs cannot affect E2E behavior, add `exclude: ['**/*.md', '**/*.mdx']` explicitly. Exclusions reduce model context for mixed changes; if every changed path is excluded, the selector currently runs the full suite.
+Globs match repository-relative changed paths, not test titles. Exclusions take precedence, but a directly changed spec still runs. Source excerpts and diffs go to your configured provider. For example, if documentation cannot affect your app, add `exclude: ['**/*.md', '**/*.mdx']`. If every changed path is excluded, the full suite runs.
 
 Git uses `--unified=3` and ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
 
@@ -115,11 +109,11 @@ export default defineConfigWithJev(
 );
 ```
 
-`diff.whitespace` controls **what Git ignores when comparing lines**, not whether whitespace is included in the displayed patch. The default `'all'` uses `--ignore-all-space` (`-w`), so a change consisting only of whitespace can be omitted from the patch. `'change'` uses `-b` (ignores changes in the amount of whitespace), `'eol'` ignores end-of-line whitespace, and `'none'` ignores nothing. The option never changes the changed-file inventory or forced spec selection. Use `'none'` when whitespace can affect behavior, such as CSS, HTML, templates, or literal-sensitive files. Newly added, untracked files are included as text and are not processed by Git's whitespace flags.
+`diff.whitespace` controls what Git **ignores**. The default `'all'` ignores whitespace-only changes; `'change'` ignores differences in the amount of whitespace; `'eol'` ignores end-of-line whitespace; `'none'` preserves all whitespace changes. Use `'none'` for CSS, HTML, or templates where spacing can matter. Changed-file detection and directly changed specs are unaffected.
 
-Jev currently documents **32k tokens for state plus the longest question**, and **64k for the full request**. The selector batches by these budgets, not a fixed number of tests. Independent batches, including diff chunks, run with at most **five in-flight Jev calls** by default; set `limits.maxConcurrentRequests` to tune this for your provider. The complete request plan must fit within `limits.maxRequests` (default `100`) before any calls begin. If one batch fails, already-started calls settle and the full suite runs. `beforeRequest` hooks may run concurrently, so avoid sharing mutable state between them. Because the SDK does not expose Jev's tokenizer, sizing uses serialized UTF-8 bytes as a conservative proxy and may split earlier than the model requires. For OpenRouter's documented 32k total context, set `limits.requestTokens` to `32000`.
+TypeSafe documents **32k tokens for state plus the longest question** and **64k per request**. The selector fits tests within those limits and makes up to **five requests concurrently** by default. Set `limits.maxConcurrentRequests` for your provider; OpenRouter users should set `limits.requestTokens: 32000` for its documented 32k context. `beforeRequest` hooks may run concurrently.
 
-**All, none, or some** are derived from those per-test probabilities; Jev is not asked a second, potentially contradictory scope question. When no test meets the threshold across every evaluated batch, the reporter marks discovered tests as skipped and Playwright exits successfully if nothing else fails. Directly changed specs still run. An unavailable git ref, missing credentials, oversized change, or invalid/incomplete per-test answer instead runs the **full discovered suite**. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>` to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before relying on reduced CI runs.
+If no test meets the threshold, Playwright marks the tests as skipped and exits successfully if nothing else fails. Directly changed specs still run. A missing git ref, provider error, or incomplete answer runs the **full suite** instead. The reporter prints either `Selected N/M tests` or `Running all tests: <reason>`. Compare selections with full-suite results before relying on reduced CI runs.
 
 ### Smart diff selection
 
