@@ -45,6 +45,8 @@ export interface JevPlaywrightConfig {
   include?: string[];
   /** Changed paths excluded from context; exclusions take precedence. @default [] */
   exclude?: string[];
+  /** Exclude paths marked `linguist-generated` in git attributes from model context. @default true */
+  excludeGeneratedFiles?: boolean;
   /** How git formats the patch sent to Jev. @default { whitespace: 'all', ignoreBlankLines: false, contextLines: 3 } */
   diff?: JevDiffConfig;
   /** Select tests at or above this yes probability. @default 0.5 */
@@ -207,6 +209,13 @@ export function resolveConfig(
     include: parseGlobs(readEnv(env, 'INCLUDE'), 'JEV_PLAYWRIGHT_INCLUDE') ??
       config.include ?? ['**/*'],
     exclude: parseGlobs(readEnv(env, 'EXCLUDE'), 'JEV_PLAYWRIGHT_EXCLUDE') ?? config.exclude ?? [],
+    excludeGeneratedFiles:
+      parseBoolean(
+        readEnv(env, 'EXCLUDE_GENERATED_FILES'),
+        'JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES'
+      ) ??
+      config.excludeGeneratedFiles ??
+      true,
     diff: {
       whitespace:
         parseWhitespace(readEnv(env, 'DIFF_WHITESPACE')) ?? config.diff?.whitespace ?? 'all',

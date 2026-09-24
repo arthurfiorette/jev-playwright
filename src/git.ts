@@ -3,7 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ResolvedConfig } from './config.js';
-import { filterPaths } from './config.js';
+import { filterPaths, resolveConfig } from './config.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -13,6 +13,36 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
 
 function parsePaths(output: string): string[] {
   return output.split('\0').filter(Boolean);
+}
+
+async function generatedPaths(
+  root: string,
+  paths: string[],
+  config: ResolvedConfig
+): Promise<Set<string>> {
+  const generated = new Set<string>();
+  if (!config.excludeGeneratedFiles) return generated;
+
+  for (let offset = 0; offset < paths.length; offset += 100) {
+    const batch = paths.slice(offset, offset + 100);
+    const output = await runGit(root, ['check-attr', '-z', 'linguist-generated', '--', ...batch]);
+    const fields = output.split('\0');
+    if (fields.pop() !== '' || fields.length !== batch.length * 3) {
+      throw new Error('Unexpected git check-attr output');
+    }
+
+    for (let index = 0; index < fields.length; index += 3) {
+      const path = fields[index];
+      const attribute = fields[index + 1];
+      const value = fields[index + 2];
+      if (!path || attribute !== 'linguist-generated' || !value) {
+        throw new Error('Unexpected git check-attr entry');
+      }
+      if (value === 'set' || value === 'true') generated.add(path);
+    }
+  }
+
+  return generated;
 }
 
 /** Git's status and path pair, including the previous path for renames. */
@@ -81,6 +111,7 @@ function diffFlags(config?: ResolvedConfig): string[] {
 }
 
 async function readUntrackedFile(cwd: string, path: string, maxBytes: number): Promise<string> {
+  // Follow untracked symlinks intentionally; use include/exclude globs to limit files sent to Jev.
   const content = await readFile(resolve(cwd, path));
   if (content.includes(0) || content.length > maxBytes) {
     throw new Error(`Cannot safely include untracked file: ${path}`);
@@ -116,6 +147,8 @@ export interface Changes {
   /** Absolute git root for repo-relative paths in `files`, when collected by getGitChanges. */
   root?: string;
   files: string[];
+  /** Changed paths excluded from Jev context by the `linguist-generated` git attribute. */
+  generatedFiles?: string[];
   /** Changed-file statuses from git; absent for caller-provided changes. */
   statuses?: ChangedFile[];
   /** Complete per-file patches, when available for lossless chunking. */
@@ -151,6 +184,7 @@ export async function getGitChanges(
 ): Promise<Changes> {
   // Git reports names relative to its root, even when invoked inside a workspace package.
   const root = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
+  const options = config ?? resolveConfig({ cwd });
   const canonicalCwd = await realpath(cwd);
   const excluded = new Set(
     excludedSpecs.map((file) => resolve(canonicalCwd, relative(cwd, resolve(cwd, file))))
@@ -162,13 +196,23 @@ export async function getGitChanges(
       await runGit(root, ['diff', '--find-renames', '--name-status', '-z', base, 'HEAD'])
     );
     const files = statuses.map((entry) => entry.path);
-    const included = relevantPaths(files, root, config, excluded);
+    const generated = await generatedPaths(root, files, options);
+    const included = relevantPaths(files, root, options, excluded).filter(
+      (file) => !generated.has(file)
+    );
     const modelStatuses = statuses.filter((entry) => included.includes(entry.path));
     const diff = included.length
-      ? await runGit(root, ['diff', ...diffFlags(config), base, 'HEAD', '--', ...included])
+      ? await runGit(root, ['diff', ...diffFlags(options), base, 'HEAD', '--', ...included])
       : '';
 
-    return { root, files, statuses: modelStatuses, diff, patches: splitGitPatches(diff) };
+    return {
+      root,
+      files,
+      generatedFiles: [...generated],
+      statuses: modelStatuses,
+      diff,
+      patches: splitGitPatches(diff)
+    };
   }
 
   const [staged, unstaged, untracked] = await Promise.all([
@@ -179,7 +223,10 @@ export async function getGitChanges(
   const trackedStatuses = [...parseNameStatus(staged), ...parseNameStatus(unstaged)];
   const untrackedPaths = parsePaths(untracked);
   const files = [...new Set([...trackedStatuses.map((entry) => entry.path), ...untrackedPaths])];
-  const included = relevantPaths(files, root, config, excluded);
+  const generated = await generatedPaths(root, files, options);
+  const included = relevantPaths(files, root, options, excluded).filter(
+    (file) => !generated.has(file)
+  );
   const modelStatuses = [
     ...trackedStatuses.filter((entry) => included.includes(entry.path)),
     ...untrackedPaths
@@ -189,16 +236,21 @@ export async function getGitChanges(
 
   const [stagedDiff, unstagedDiff] = included.length
     ? await Promise.all([
-        runGit(root, ['diff', '--cached', ...diffFlags(config), '--', ...included]),
-        runGit(root, ['diff', ...diffFlags(config), '--', ...included])
+        runGit(root, ['diff', '--cached', ...diffFlags(options), '--', ...included]),
+        runGit(root, ['diff', ...diffFlags(options), '--', ...included])
       ])
     : ['', ''];
   const patches = [
     ...splitGitPatches(stagedDiff),
     ...splitGitPatches(unstagedDiff),
-    ...(await readUntracked(root, untrackedPaths, config, excluded))
+    ...(await readUntracked(
+      root,
+      untrackedPaths,
+      options,
+      new Set([...excluded, ...[...generated].map((path) => resolve(root, path))])
+    ))
   ];
   const diff = patches.join('\n');
 
-  return { root, files, statuses: modelStatuses, diff, patches };
+  return { root, files, generatedFiles: [...generated], statuses: modelStatuses, diff, patches };
 }

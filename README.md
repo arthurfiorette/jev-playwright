@@ -93,6 +93,21 @@ export default defineConfigWithJev(
 
 Globs match repository-relative changed paths, not test titles. Exclusions take precedence, but a directly changed spec still runs. Source excerpts and diffs go to your configured provider. For example, if documentation cannot affect your app, add `exclude: ['**/*.md', '**/*.mdx']`. If every changed path is excluded, the full suite runs.
 
+### Exclude generated files
+
+`excludeGeneratedFiles` defaults to `true`. Mark files whose generated content should not influence test selection in your repository's `.gitattributes`:
+
+```gitattributes
+pnpm-lock.yaml    linguist-generated=true
+src/generated/**  linguist-generated=true
+```
+
+Git reads the effective attribute, including rules in nested `.gitattributes` files. Marked files stay in the changed-file inventory, but their paths and patches are omitted from Jev's context. Directly changed Playwright specs still run. If **only** generated files changed, the full suite runs. Set `excludeGeneratedFiles: false` (or `JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES=false`) to include their diffs.
+
+The attribute lookup happens when `getGitChanges()` reads the repository. If you supply your own `Changes` object to `selectTests()`, filter its `diff` and `patches` yourself.
+
+The same [`linguist-generated` attribute](https://github.com/github-linguist/linguist/blob/main/docs/overrides.md#generated-code) tells GitHub to hide generated files in diff views. Other Git hosts may present those files differently; selection uses Git's attributes, not a provider API.
+
 Git uses `--unified=3` and ignores whitespace-only changes by default. To **preserve whitespace changes** in the patch Jev sees, set `whitespace: 'none'`:
 
 ```ts
@@ -121,12 +136,12 @@ Jev sees changed files, their add/modify/delete/rename status, and the git patch
 
 Descriptions are converted to plain text and limited to 2,000 characters; titles are limited to 200. This cleanup affects only the hint, not the patch.
 
-| Change | Context sent to Jev |
-| --- | --- |
-| Patch fits | All changed paths and the full patch are sent together. |
-| Patch exceeds the request budget | Every file's patch is evaluated in chunks. A test is selected if any chunk finds it relevant. |
-| Only discovered specs changed | No Jev call; those specs run directly. |
-| One file's patch cannot fit, a request fails, or `limits.maxRequests` is reached | Full discovered suite runs. |
+| Change                                                                           | Context sent to Jev                                                                           |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Patch fits                                                                       | All changed paths and the full patch are sent together.                                       |
+| Patch exceeds the request budget                                                 | Every file's patch is evaluated in chunks. A test is selected if any chunk finds it relevant. |
+| Only discovered specs changed                                                    | No Jev call; those specs run directly.                                                        |
+| One file's patch cannot fit, a request fails, or `limits.maxRequests` is reached | Full discovered suite runs.                                                                   |
 
 The reporter skips all tests only after **every** required chunk is evaluated. Programmatic callers supplying an oversized diff must also supply per-file `patches`; otherwise the full suite runs.
 
@@ -301,29 +316,30 @@ console.log(
 
 Environment variables override the corresponding reporter options. Set JSON arrays for glob variables, for example `JEV_PLAYWRIGHT_INCLUDE='["src/**","e2e/**"]'`.
 
-| Option                                      | Environment variable                                         | Default                                 |
-| ------------------------------------------- | ------------------------------------------------------------ | --------------------------------------- |
-| `enabled`                                   | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`)         | `false`                                 |
-| `baseRef`                                   | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF`                   | CI baseline or local changes            |
-| `defaultBranch`                             | `JEV_PLAYWRIGHT_DEFAULT_BRANCH`                              | provider value, then `main`             |
-| `cwd`                                       | `JEV_PLAYWRIGHT_CWD`                                         | `process.cwd()`                         |
-| `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                              |
-| `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                    |
-| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                   |
+| Option                                      | Environment variable                                         | Default                                                       |
+| ------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------- |
+| `enabled`                                   | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`)         | `false`                                                       |
+| `baseRef`                                   | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF`                   | CI baseline or local changes                                  |
+| `defaultBranch`                             | `JEV_PLAYWRIGHT_DEFAULT_BRANCH`                              | provider value, then `main`                                   |
+| `cwd`                                       | `JEV_PLAYWRIGHT_CWD`                                         | `process.cwd()`                                               |
+| `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                                                    |
+| `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                                          |
+| `excludeGeneratedFiles`                     | `JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES`                     | `true`                                                        |
+| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                                         |
 | `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all` (ignore whitespace-only changes); `none` preserves them |
-| `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                    | `false`                                 |
-| `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `3`                                     |
-| `limits.stateAndQuestionTokens`             | `JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS`           | `32000`                                 |
-| `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                      | `64000`                                 |
-| `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                        | `100`                                   |
-| `limits.maxConcurrentRequests`              | `JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS`             | `5`                                     |
-| `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                 |
-| `perProject`                                | `JEV_PLAYWRIGHT_PER_PROJECT`                                 | `false` (share decisions across projects) |
-| `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                 |
-| `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                            |
-| `prTitle`, `prDescription`                  | `JEV_PLAYWRIGHT_PR_TITLE`, `JEV_PLAYWRIGHT_PR_DESCRIPTION`   | unset                                   |
-| `providerUrl`, `providerKey`                | `JEV_PLAYWRIGHT_PROVIDER_URL`, `JEV_PLAYWRIGHT_PROVIDER_KEY` | SDK defaults                            |
-| `client`, `createQuestion`, `beforeRequest` | Playwright config only                                       | SDK client, built-in question, no hook  |
+| `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                     | `false`                                                       |
+| `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `3`                                                           |
+| `limits.stateAndQuestionTokens`             | `JEV_PLAYWRIGHT_LIMITS_STATE_AND_QUESTION_TOKENS`            | `32000`                                                       |
+| `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                       | `64000`                                                       |
+| `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                         | `100`                                                         |
+| `limits.maxConcurrentRequests`              | `JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS`              | `5`                                                           |
+| `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                                       |
+| `perProject`                                | `JEV_PLAYWRIGHT_PER_PROJECT`                                 | `false` (share decisions across projects)                     |
+| `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                                       |
+| `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                                                  |
+| `prTitle`, `prDescription`                  | `JEV_PLAYWRIGHT_PR_TITLE`, `JEV_PLAYWRIGHT_PR_DESCRIPTION`   | unset                                                         |
+| `providerUrl`, `providerKey`                | `JEV_PLAYWRIGHT_PROVIDER_URL`, `JEV_PLAYWRIGHT_PROVIDER_KEY` | SDK defaults                                                  |
+| `client`, `createQuestion`, `beforeRequest` | Playwright config only                                       | SDK client, built-in question, no hook                        |
 
 <br />
 

@@ -230,3 +230,66 @@ test('git paths and patch pathspecs stay root-relative from a nested Playwright 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('linguist-generated paths stay in the inventory but not the local or committed model patch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-generated-'));
+  const nested = join(root, 'e2e');
+
+  try {
+    await mkdir(nested);
+    runGit(root, 'init', '-q');
+    await writeFile(join(root, '.gitattributes'), 'pnpm-lock.yaml linguist-generated=true\n');
+    await writeFile(
+      join(nested, '.gitattributes'),
+      '*.snap linguist-generated\nvisible.snap -linguist-generated\n'
+    );
+    await writeFile(join(root, 'pnpm-lock.yaml'), 'lock before\n');
+    await writeFile(join(root, 'app.ts'), 'app before\n');
+    await writeFile(join(nested, 'capture.snap'), 'generated before\n');
+    await writeFile(join(nested, 'visible.snap'), 'visible before\n');
+    commit(root, 'baseline');
+    const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+
+    await writeFile(join(root, 'pnpm-lock.yaml'), 'lock after\n');
+    await writeFile(join(root, 'app.ts'), 'app after\n');
+    await writeFile(join(nested, 'capture.snap'), 'generated after\n');
+    await writeFile(join(nested, 'visible.snap'), 'visible after\n');
+    await writeFile(join(nested, 'new.snap'), 'new generated\n');
+
+    const config = resolveConfig({ cwd: nested }, {});
+    const local = await getGitChanges(nested, undefined, config);
+    assert.deepEqual(local.generatedFiles?.sort(), [
+      'e2e/capture.snap',
+      'e2e/new.snap',
+      'pnpm-lock.yaml'
+    ]);
+    assert.deepEqual(local.files.sort(), [
+      'app.ts',
+      'e2e/capture.snap',
+      'e2e/new.snap',
+      'e2e/visible.snap',
+      'pnpm-lock.yaml'
+    ]);
+    assert.deepEqual(local.statuses?.map((entry) => entry.path).sort(), [
+      'app.ts',
+      'e2e/visible.snap'
+    ]);
+    assert.match(local.diff ?? '', /app after|visible after/);
+    assert.doesNotMatch(local.diff ?? '', /lock after|generated after|new generated/);
+
+    const unfiltered = await getGitChanges(
+      nested,
+      undefined,
+      resolveConfig({ cwd: nested, excludeGeneratedFiles: false }, {})
+    );
+    assert.match(unfiltered.diff ?? '', /lock after|generated after|new generated/);
+
+    commit(root, 'changed');
+    const committed = await getGitChanges(nested, base, config);
+    assert.deepEqual(committed.generatedFiles?.sort(), local.generatedFiles);
+    assert.doesNotMatch(committed.diff ?? '', /lock after|generated after|new generated/);
+    assert.match(committed.diff ?? '', /app after|visible after/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

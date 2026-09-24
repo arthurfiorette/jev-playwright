@@ -40,6 +40,11 @@ test('config precedence, glob filtering, and validation', () => {
   assert.equal(config.baseRef, 'main');
   assert.equal(config.threshold, 0.4);
   assert.equal(config.perProject, false);
+  assert.equal(config.excludeGeneratedFiles, true);
+  assert.equal(
+    resolveConfig({}, { JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES: 'false' }).excludeGeneratedFiles,
+    false
+  );
   assert.equal(config.limits.maxConcurrentRequests, 5);
   assert.equal(
     resolveConfig(
@@ -121,6 +126,47 @@ test('a change only to a discovered spec runs that spec without calling Jev', as
   assert.deepEqual(result.selectedIds, ['a']);
   assert.deepEqual(result.assessments, []);
   assert.equal(result.fallbackReason, undefined);
+});
+
+test('generated paths are omitted from model context while changed specs still run', async () => {
+  let state = '';
+  const mock: Pick<TypeSafeClient, 'systemOne'> = {
+    systemOne: (async (request: { state: string; questions: Record<string, unknown> }) => {
+      state = request.state;
+      return {
+        model: 'mock',
+        answers: Object.fromEntries(
+          Object.keys(request.questions).map((key) => [key, { type: 'noul', noul: 0 }])
+        )
+      };
+    }) as unknown as TypeSafeClient['systemOne']
+  };
+  const result = await selectTests({
+    tests,
+    changes: {
+      files: ['e2e/a.spec.ts', 'pnpm-lock.yaml', 'src/payments.ts'],
+      generatedFiles: ['e2e/a.spec.ts', 'pnpm-lock.yaml'],
+      statuses: [{ status: 'M', path: 'src/payments.ts' }],
+      diff: '+payments updated'
+    },
+    config: { enabled: true, cwd: '/repo' },
+    env: {},
+    client: mock
+  });
+
+  assert.deepEqual(result.selectedIds, ['a']);
+  assert.match(state, /src\/payments\.ts/);
+  assert.doesNotMatch(state, /pnpm-lock\.yaml|e2e\/a\.spec\.ts/);
+
+  const generatedOnly = await selectTests({
+    tests,
+    changes: { files: ['pnpm-lock.yaml'], generatedFiles: ['pnpm-lock.yaml'] },
+    config: { enabled: true, cwd: '/repo' },
+    env: {},
+    client: mock
+  });
+  assert.equal(generatedOnly.fallbackReason, 'no included changes');
+  assert.deepEqual(generatedOnly.selectedIds, ['a', 'b', 'c']);
 });
 
 test('forced specs resolve against the git root when Playwright runs in a subdirectory', async () => {

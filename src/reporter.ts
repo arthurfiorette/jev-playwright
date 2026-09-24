@@ -61,6 +61,7 @@ export class JevReporter implements Reporter {
       }
       const root = changes.root ?? config.cwd;
       reporterDebug('changed paths %O', changes.files);
+      reporterDebug('generated paths %O', changes.generatedFiles);
       reporterDebug('included paths %O', filterPaths(changes.files, config));
       reporterDebug(
         'forced spec paths %O',

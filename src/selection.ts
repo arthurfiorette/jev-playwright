@@ -238,9 +238,10 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
   const root = input.changes.root ?? config.cwd;
   const forced = forcedIds(input.tests, input.changes.files, root);
   const files = filterPaths(input.changes.files, config);
+  const generated = new Set(config.excludeGeneratedFiles ? input.changes.generatedFiles : []);
   const changedSpecs = input.tests.filter((test) => forced.has(test.id));
   const modelFiles = files.filter(
-    (file) => !changedSpecs.some((test) => sameFile(file, test.file, root))
+    (file) => !generated.has(file) && !changedSpecs.some((test) => sameFile(file, test.file, root))
   );
   selectionDebug('model paths %O', modelFiles);
   if (!modelFiles.length) {
