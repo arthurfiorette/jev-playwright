@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { rm, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 function localGitEnv(): NodeJS.ProcessEnv {
@@ -64,9 +64,9 @@ test('reporter runs actual Playwright tests and handles a missing provider by ru
 });
 
 test('reporter can exclude every test after a complete empty Jev decision', async () => {
-  const change = `test/fixtures/.jev-change-${randomUUID()}.txt`;
-  const file = resolve(change);
-  await writeFile(file, 'fixture change\n', { flag: 'wx' });
+  const cwd = await mkdtemp(join(tmpdir(), 'jev-reporter-'));
+  execFileSync('git', ['init', '-q'], { cwd });
+  await writeFile(join(cwd, 'change.txt'), 'fixture change\n');
 
   try {
     const run = spawnSync(
@@ -83,8 +83,9 @@ test('reporter can exclude every test after a complete empty Jev decision', asyn
         env: {
           ...localGitEnv(),
           JEV_PLAYWRIGHT_ENABLED: 'true',
+          JEV_PLAYWRIGHT_CWD: cwd,
           DEBUG: 'jev-playwright:*',
-          JEV_PLAYWRIGHT_INCLUDE: JSON.stringify([change]),
+          JEV_PLAYWRIGHT_INCLUDE: '["change.txt"]',
           JEV_PLAYWRIGHT_PROVIDER_KEY: '',
           TYPESAFE_API_KEY: ''
         }
@@ -100,11 +101,14 @@ test('reporter can exclude every test after a complete empty Jev decision', asyn
     assert.match(run.stderr, /jev-playwright:reporter test source .*included: false/s);
     assert.match(run.stderr, /jev-playwright:selection request 1 state/);
     assert.match(run.stderr, /jev-playwright:selection request 1 questions/);
-    assert.match(run.stderr, /Test:test_0\|test\/fixtures\/smoke\.spec\.ts:3:1\|first fixture/);
+    assert.match(
+      run.stderr,
+      /Test:test_0\|[^\n]*test\/fixtures\/smoke\.spec\.ts:3:1\|first fixture/
+    );
     assert.match(run.stderr, /jev-playwright:selection request 1 response/);
     assert.match(run.stdout, /2 skipped/);
     assert.doesNotMatch(run.stdout, /2 passed/);
   } finally {
-    await rm(file);
+    await rm(cwd, { recursive: true, force: true });
   }
 });

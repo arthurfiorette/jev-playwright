@@ -71,7 +71,9 @@ function testQuestion(test: TestDescriptor, key: string, config: ResolvedConfig)
     (config.createQuestion ?? defaultQuestion)(test, key),
     `Test:${fields.join('|')}`,
     ...(config.includeTestSource && test.source
-      ? [`Test source:\n${limitTestSource(test.source, config.maxTestSourceTokens)}`]
+      ? [
+          `Test body and leading comments:\n${limitTestSource(test.source, config.maxTestSourceTokens)}`
+        ]
       : [])
   ].join('\n');
 }

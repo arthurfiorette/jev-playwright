@@ -2,15 +2,12 @@ import { readFile, stat } from 'node:fs/promises';
 import type { TestCase } from '@playwright/test/reporter';
 import jsTokens from 'js-tokens';
 import type { TestDescriptor } from './selection.js';
-
-interface LocatedTest {
-  index: number;
-  line: number;
-}
+import type { TestLocation } from './test-body.js';
+import { extractTestBodies } from './test-body.js';
 
 interface FileGroup {
   file: string;
-  tests: LocatedTest[];
+  tests: TestLocation[];
 }
 
 interface Excerpt {
@@ -59,12 +56,12 @@ export function limitTestSource(source: string, maxTokens: number): string {
 }
 
 function groupTests(tests: TestCase[]): FileGroup[] {
-  const groups = new Map<string, LocatedTest[]>();
+  const groups = new Map<string, TestLocation[]>();
 
   for (const [index, test] of tests.entries()) {
     const file = test.location.file;
     const group = groups.get(file) ?? [];
-    group.push({ index, line: test.location.line });
+    group.push({ index, line: test.location.line, column: test.location.column });
     groups.set(file, group);
   }
 
@@ -76,33 +73,15 @@ async function extractFileSources(group: FileGroup, maxTokens: number): Promise<
   if (info.size > 2_000_000)
     throw new Error(`Spec too large to read for source context: ${group.file}`);
 
-  const lines = (await readFile(group.file, 'utf8')).split('\n');
-  const ordered = group.tests.toSorted((a, b) => a.line - b.line);
-  const excerpts: Excerpt[] = [];
-  const nextLine = new Map<number, number>();
-
-  let next = lines.length + 1;
-  for (let index = ordered.length - 1; index >= 0; index--) {
-    const line = ordered[index]?.line;
-    if (line === undefined || nextLine.has(line)) continue;
-
-    nextLine.set(line, next);
-    next = line;
-  }
-
-  for (const test of ordered) {
-    const start = Math.max(0, test.line - 1);
-    const end = (nextLine.get(test.line) ?? lines.length + 1) - 1;
-    excerpts.push({
-      index: test.index,
-      source: limitTestSource(lines.slice(start, end).join('\n'), maxTokens)
-    });
-  }
-
-  return excerpts;
+  const contents = await readFile(group.file, 'utf8');
+  const bodies = extractTestBodies(group.file, contents, group.tests);
+  return group.tests.map((test) => ({
+    index: test.index,
+    source: limitTestSource(bodies.get(test.index) ?? '', maxTokens)
+  }));
 }
 
-/** Read up to four specs at once, retaining only bounded excerpts after each read. */
+/** Parse up to four specs at once, retaining only bounded test bodies after each read. */
 export async function withTestSource(
   tests: TestCase[],
   descriptors: TestDescriptor[],

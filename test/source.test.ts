@@ -20,9 +20,9 @@ test('source compression preserves comments, newlines, and literal whitespace', 
   assert.equal(limitTestSource('return\n  value', 100), 'return\nvalue');
 });
 
-test('source extraction reads a shared spec and bounds excerpts at the next declaration', async () => {
+test('source extraction reads a shared spec and returns callback bodies without test wrappers', async () => {
   const file = resolve('test/fixtures/smoke.spec.ts');
-  const tests = [{ location: { file, line: 3 } }, { location: { file, line: 4 } }] as TestCase[];
+  const tests = [{ location: { file, line: 3 } }, { location: { file, line: 6 } }] as TestCase[];
   const descriptors = [
     { id: 'first', file, title: 'first fixture' },
     { id: 'second', file, title: 'second fixture' }
@@ -30,9 +30,9 @@ test('source extraction reads a shared spec and bounds excerpts at the next decl
 
   const excerpts = await withTestSource(tests, descriptors, 50);
 
-  assert.match(excerpts[0]?.source ?? '', /first fixture/);
-  assert.doesNotMatch(excerpts[0]?.source ?? '', /second fixture/);
-  assert.match(excerpts[1]?.source ?? '', /second fixture/);
+  assert.match(excerpts[0]?.source ?? '', /expect\(1\)/);
+  assert.doesNotMatch(excerpts[0]?.source ?? '', /expect\(2\)|test\('first fixture'/);
+  assert.match(excerpts[1]?.source ?? '', /expect\(2\)/);
   assert.ok((excerpts[1]?.source?.length ?? 0) <= 50);
 });
 
@@ -46,11 +46,12 @@ test('source extraction reaches past 40 lines without including the next test', 
       ...Array.from({ length: 44 }, () => '  await page.waitForTimeout(1);'),
       '  expect(page).toBeDefined();',
       '});',
-      "test('second', () => {});"
+      '/** description of the second test only */',
+      "test('second', () => { expect(2).toBe(2); });"
     ];
     await writeFile(file, lines.join('\n'));
 
-    const tests = [{ location: { file, line: 1 } }, { location: { file, line: 48 } }] as TestCase[];
+    const tests = [{ location: { file, line: 1 } }, { location: { file, line: 49 } }] as TestCase[];
     const descriptors = [
       { id: 'first', file, title: 'first' },
       { id: 'second', file, title: 'second' }
@@ -58,8 +59,9 @@ test('source extraction reaches past 40 lines without including the next test', 
     const excerpts = await withTestSource(tests, descriptors, 5000);
 
     assert.match(excerpts[0]?.source ?? '', /expect\(page\)/);
-    assert.doesNotMatch(excerpts[0]?.source ?? '', /second/);
-    assert.match(excerpts[1]?.source ?? '', /second/);
+    assert.doesNotMatch(excerpts[0]?.source ?? '', /description of the second test/);
+    assert.match(excerpts[1]?.source ?? '', /description of the second test/);
+    assert.match(excerpts[1]?.source ?? '', /expect\(2\)/);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
