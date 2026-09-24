@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+*.log
+/.oclif
+oclif.manifest.json
+parity.md
+docs/
+schema.json
+bench/results/
+bench/generated/
