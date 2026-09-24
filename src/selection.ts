@@ -4,6 +4,7 @@ import type { JevPlaywrightConfig, ResolvedConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
 import type { Changes } from './git.js';
 import { createRequest } from './prompt.js';
+import { sourceCharLimit } from './source.js';
 
 /** A discovered Playwright test. IDs must be unique within a selection call. */
 export interface TestDescriptor {
@@ -103,6 +104,30 @@ async function assessBatch(
   return assessments;
 }
 
+function nextCandidateBatch(
+  candidates: TestDescriptor[],
+  start: number,
+  config: ResolvedConfig
+): TestDescriptor[] {
+  const batch: TestDescriptor[] = [];
+  let sourceChars = 0;
+
+  for (let index = start; index < candidates.length && batch.length < config.batchSize; index++) {
+    const candidate = candidates[index];
+    if (!candidate) break;
+
+    const length = config.includeTestSource
+      ? Math.min(candidate.source?.length ?? 0, sourceCharLimit(config.maxTestSourceTokens))
+      : 0;
+    if (batch.length && sourceChars + length > 40_000) break;
+
+    batch.push(candidate);
+    sourceChars += length;
+  }
+
+  return batch;
+}
+
 async function assessCandidates(
   candidates: TestDescriptor[],
   changes: Changes,
@@ -110,16 +135,11 @@ async function assessCandidates(
   client: Pick<TypeSafeClient, 'systemOne'>
 ): Promise<Assessment[]> {
   const assessments: Assessment[] = [];
-  // Leave room for the diff and questions when source excerpts are enabled.
-  const size = config.includeTestSource
-    ? Math.min(
-        config.batchSize,
-        Math.max(1, Math.floor(40_000 / Math.min(25_000, config.maxTestSourceTokens * 12)))
-      )
-    : config.batchSize;
-  for (let offset = 0; offset < candidates.length; offset += size) {
-    const batch = candidates.slice(offset, offset + size);
+
+  for (let offset = 0; offset < candidates.length; ) {
+    const batch = nextCandidateBatch(candidates, offset, config);
     assessments.push(...(await assessBatch(batch, changes, config, client)));
+    offset += batch.length;
   }
   return assessments;
 }

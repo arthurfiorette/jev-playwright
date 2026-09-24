@@ -18,21 +18,41 @@ interface Excerpt {
   source: string;
 }
 
-/** Bound lexical code tokens while keeping a hard size cap for long literals and comments. */
+/** Bound unusually long literals without truncating ordinary short-token expressions too aggressively. */
+export function sourceCharLimit(maxTokens: number): number {
+  return Math.min(15_000, maxTokens * 6);
+}
+
+/** Compact insignificant whitespace while bounding lexical tokens and unusually long literals. */
 export function limitTestSource(source: string, maxTokens: number): string {
-  const maxChars = Math.min(25_000, maxTokens * 12);
+  const maxChars = sourceCharLimit(maxTokens);
   let result = '';
   let counted = 0;
+  let pendingSpace = false;
+  let pendingNewline = false;
 
   for (const token of jsTokens(source, { jsx: true })) {
-    if (token.type !== 'WhiteSpace' && token.type !== 'LineTerminatorSequence') {
-      if (counted >= maxTokens) break;
-      counted++;
+    if (token.type === 'WhiteSpace') {
+      if (result && !pendingNewline) pendingSpace = true;
+      continue;
     }
 
+    if (token.type === 'LineTerminatorSequence') {
+      pendingNewline = true;
+      pendingSpace = false;
+      continue;
+    }
+
+    if (counted >= maxTokens) break;
+    const separator = pendingNewline && result ? '\n' : pendingSpace ? ' ' : '';
     const remaining = maxChars - result.length;
     if (remaining <= 0) break;
-    result += token.value.slice(0, remaining);
+
+    // Keep line breaks for comments and automatic semicolon insertion; tokens stay untouched until the cap.
+    result += `${separator}${token.value}`.slice(0, remaining);
+    counted++;
+    pendingSpace = false;
+    pendingNewline = false;
   }
 
   return result;
@@ -72,7 +92,7 @@ async function extractFileSources(group: FileGroup, maxTokens: number): Promise<
 
   for (const test of ordered) {
     const start = Math.max(0, test.line - 1);
-    const end = Math.min(start + 40, (nextLine.get(test.line) ?? lines.length + 1) - 1);
+    const end = (nextLine.get(test.line) ?? lines.length + 1) - 1;
     excerpts.push({
       index: test.index,
       source: limitTestSource(lines.slice(start, end).join('\n'), maxTokens)

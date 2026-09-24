@@ -1,70 +1,125 @@
-# jev-playwright
+<p align="center">
+   <b>Using this package?</b> Please consider <a href="https://github.com/sponsors/arthurfiorette" target="_blank">donating</a> to support my open source work ❤️
+  <br />
+  <sup>
+   Help jev-playwright grow! Star and share this amazing repository with your friends and co-workers!
+  </sup>
+</p>
 
-Select existing Playwright tests relevant to a code change with [Jev](https://docs.typesafe.ai/). Requires Node.js 24.16+ and Playwright 1.62+. The reporter selects tests in Playwright's `preprocess()` phase, before execution and sharding. Selection is opt-in. On missing changes, incomplete answers, errors, or an empty selection, it runs the entire discovered suite.
+<br />
 
-## Install and run
+<p align="center" title="jev-playwright logo">
+  <a href="https://github.com/arthurfiorette/jev-playwright">
+    <img src="https://raw.githubusercontent.com/arthurfiorette/jev-playwright/main/assets/logo.png" width="500" alt="Jev Playwright logo: code changes flowing to selected browser tests" />
+  </a>
+</p>
 
-```sh
-pnpm add -D jev-playwright @playwright/test
-```
+# Jev Playwright
 
-Set `JEV_PLAYWRIGHT_PROVIDER_KEY` to your TypeSafe API key. To use OpenRouter, set `JEV_PLAYWRIGHT_PROVIDER_URL=https://openrouter.ai/api` and use an OpenRouter key. The package calls `@typesafe-ai/sdk` directly. The SDK appends `/v1/systemone` to the provider URL. `jev-latest` is the default model; set `JEV_PLAYWRIGHT_MODEL=jev-1.13` to pin an OpenRouter version. See [OpenRouter's TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
+**Run the Playwright tests relevant to a code change.** Add one reporter; it uses [Jev](https://docs.typesafe.ai/) to select existing tests before they run. If selection cannot be completed, Playwright runs the full suite.
+
+Package-aware tools such as Turborepo and Nx can scope unit tests using the changed-package graph. E2E tests are harder: a single browser journey can cross many packages, pages, and services. `jev-playwright` compares the change with Playwright's discovered tests to select relevant journeys **before browser execution**, reducing test runtime in large CI suites. It does not eliminate the time spent provisioning the E2E stack.
+
+Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started) · [Choose a provider](#choose-a-jev-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
+
+<br />
+
+## Get started
+
+1. Install the package in a project that uses Playwright:
+
+   ```sh
+   pnpm add -D jev-playwright @playwright/test
+   ```
+
+2. Set a TypeSafe API key:
+
+   ```sh
+   export JEV_PLAYWRIGHT_PROVIDER_KEY="your-typesafe-key"
+   ```
+
+   Using OpenRouter instead? See [OpenRouter setup](#openrouter).
+
+3. Add the reporter to `playwright.config.ts`:
+
+   ```ts
+   import { defineConfigWithJev } from 'jev-playwright';
+
+   export default defineConfigWithJev(
+     { enabled: true },
+     {
+       testDir: './e2e',
+       reporter: [['list']]
+     }
+   );
+   ```
+
+4. Change a file and run your usual command:
+
+   ```sh
+   pnpm exec playwright test
+   ```
+
+`defineConfigWithJev(jevOptions, playwrightConfig)` preserves your Playwright settings and existing reporters, then adds the Jev reporter. It accepts `reporter: 'list'` as well as a reporter array. **With no included changes, it runs all tests.** For CI-only selection, use `{ enabled: Boolean(process.env.CI) }` instead.
+
+<br />
+
+## How selection works
+
+Playwright discovers tests first, applying its usual project, grep, and `.only` filters. The reporter then:
+
+1. Reads the git change set. Locally, this includes staged, unstaged, and untracked files. In CI, it [detects a baseline](#use-it-in-ci).
+2. Keeps tests from directly changed spec files. Sends a bounded diff, changed paths, and each remaining test's file, title, and project to Jev.
+3. Asks one typed yes/no relevance question per test. It selects tests whose probability meets `threshold` (default `0.5`), then Playwright applies sharding and executes them.
+
+Set `includeTestSource: true` to also send an excerpt from each test declaration through the next discovered test (or the end of the file). This can reveal assertions and page-object-model (POM) calls that a title misses. It does **not** follow imports into POM implementations. The excerpt is capped at 5,000 JavaScript lexical tokens by default. Insignificant indentation and repeated blank lines are compacted while strings, comments, and meaningful line breaks are preserved. Long literals and comments are additionally bounded by a character cap (at most 15,000 characters at the default token limit). Lexical tokens are not Jev model tokens; batches adapt to the actual excerpt sizes.
 
 ```ts
-// playwright.config.ts
-import { defineConfigWithJev } from 'jev-playwright';
-
 export default defineConfigWithJev(
   {
-    enabled: !!process.env.CI,
+    enabled: true,
     include: ['src/**', 'e2e/**'],
     exclude: ['src/generated/**'],
     includeTestSource: true,
+    threshold: 0.6
   },
-  {
-    reporter: [['list']],
-    testDir: './e2e',
-  },
+  { reporter: [['list']] }
 );
 ```
 
+Globs match repository-relative **changed paths**, not test titles. Exclusions take precedence. A directly changed spec still runs even if its path is excluded from model context. Source excerpts and diffs are sent to your configured provider, so use the filters before enabling source context for sensitive tests.
+
+**Failure behavior:** An unavailable git ref, missing credentials, invalid or incomplete Jev answers, oversized diff, or an empty selection results in the **full discovered suite** running. The reporter prints the reason to stderr. Jev returns probabilities, not written explanations, and cannot invent tests that aren't in your suite. Evaluate selections against full-suite results before making reduced CI runs a required check.
+
+<br />
+
+## Choose a Jev provider
+
+### TypeSafe (default)
+
+Only the key is required. The package uses `@typesafe-ai/sdk` directly, with its default API URL and the `jev-latest` model:
+
 ```sh
-BASE_REF=origin/main JEV_PLAYWRIGHT_PROVIDER_KEY=... pnpm playwright test
+export JEV_PLAYWRIGHT_PROVIDER_KEY="your-typesafe-key"
 ```
 
-`BASE_REF` compares the merge-base with `HEAD`. Without a base ref, CI runs choose a baseline from the provider context below; local runs use staged, unstaged and untracked changes. Directly changed test files always run. Changes without an included path and changes too large for the model fall back to the full suite. Ordinary runs with `enabled: false` do not make an API call.
+The SDK's native `TYPESAFE_API_KEY` and `TYPESAFE_BASE_URL` variables also work when the corresponding `JEV_PLAYWRIGHT_*` values are unset.
 
-## CI diff baselines
+### OpenRouter
 
-Detection uses only the runner's environment, its local event JSON (where provided), and git. It makes **no provider API calls or automatic fetches**. `baseRef` or `JEV_PLAYWRIGHT_BASE_REF`/`BASE_REF` overrides the detected baseline. For branch comparisons, the local checkout must contain `refs/remotes/origin/<target>` and enough history to find its merge-base with `HEAD`. If the ref, history, or previous push SHA is missing, the reporter runs the full suite. Configure your CI checkout for full history and the target branch when enabling selection.
+Point the same TypeSafe SDK at OpenRouter's System One endpoint:
 
-### GitHub Actions
+```sh
+export JEV_PLAYWRIGHT_PROVIDER_URL="https://openrouter.ai/api"
+export JEV_PLAYWRIGHT_PROVIDER_KEY="your-openrouter-key"
+export JEV_PLAYWRIGHT_MODEL="jev-1.13"
+```
 
-`GITHUB_ACTIONS` identifies the runner. Pull requests use `GITHUB_BASE_REF` as `origin/<target>`; other branch builds compare against `origin/<default branch>`. On pushes to the default branch, `GITHUB_EVENT_PATH` supplies the `before` SHA so **all commits in the push** are included, including squash and normal merge commits. The event payload also supplies `repository.default_branch`. A default-branch build without a valid push `before` SHA runs all tests.
+The SDK appends `/v1/systemone` to the URL. `jev-1.13` is an OpenRouter-supported model ID; pin a version when tuning a selection threshold. See [OpenRouter's TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
 
-### Gitea Actions
+### Custom authentication or transport
 
-`GITEA_ACTIONS` takes precedence over GitHub's compatibility variables. Gitea exposes `GITHUB_BASE_REF`, `GITHUB_REF`, and `GITHUB_EVENT_PATH`. PRs compare against the target branch; other branches compare against the repository default branch; default-branch pushes use the event payload's `before` SHA. Missing context runs all tests.
-
-### GitLab CI
-
-`GITLAB_CI` identifies the runner. Merge requests use `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`; other branches compare against `CI_DEFAULT_BRANCH`. Pushes to the default branch use `CI_COMMIT_BEFORE_SHA`. GitLab uses an all-zero previous SHA for some pipeline types; those runs use the full suite.
-
-### Bitbucket Pipelines
-
-`BITBUCKET_BUILD_NUMBER` identifies the runner. PRs use `BITBUCKET_PR_DESTINATION_BRANCH`; feature branches compare against the default branch. Bitbucket does not expose a reliable previous push SHA as a built-in variable, so default-branch builds run all tests unless you set `BASE_REF` explicitly.
-
-### Azure Pipelines
-
-`TF_BUILD` identifies the runner. PRs use `SYSTEM_PULLREQUEST_TARGETBRANCH`; feature branches compare against the default branch. Azure does not expose a reliable previous push SHA as a built-in variable, so default-branch builds run all tests unless you set `BASE_REF` explicitly.
-
-The default branch falls back to `main` if the provider does not supply it. Set `defaultBranch` or `JEV_PLAYWRIGHT_DEFAULT_BRANCH` for repositories using another name. Unknown CI providers, tag builds, and incomplete CI context run all tests. Outside CI, no provider detection takes place. You can inspect the chosen baseline programmatically with `detectCiDiff(resolveConfig(options))`.
-
-`includeTestSource` optionally sends an excerpt starting at each test declaration (up to 40 lines, capped at 5,000 JavaScript lexical tokens by default). This exposes assertions and POM call sites without repeatedly sending entire spec files. `js-tokens` counts code tokens, not Jev's model tokens, so excerpts also have a 25,000-character hard cap and large excerpts reduce batch size. It does not follow imports into POM implementations. The source is sent to the configured provider, so only enable it for tests you intend to share.
-
-## Customize provider and questions
-
-Reporter options live in `playwright.config.ts`. They can include a configured SDK client and request hooks:
+Pass a configured SDK client if your provider needs custom headers, a fetch implementation, or other SDK settings:
 
 ```ts
 import { TypeSafeClient } from '@typesafe-ai/sdk';
@@ -75,59 +130,165 @@ export default defineConfigWithJev(
     enabled: true,
     client: new TypeSafeClient({
       apiKey: process.env.MY_JEV_KEY,
-      baseURL: process.env.MY_JEV_URL,
-    }),
-    createQuestion(test, key) {
-      return `Could the code change alter ${key} (${test.title}) or its setup?`;
-    },
-    beforeRequest(request, { changes, tests }) {
-      // Add project context when similar tests otherwise look indistinguishable.
-      return { ...request, state: { ...request.state as object, product: 'my-app' } };
-    },
+      baseURL: process.env.MY_JEV_URL
+    })
   },
-  { reporter: [['list']] },
+  { reporter: 'list' }
 );
 ```
 
-`createQuestion` supplies the instructions for each typed Noul question. `beforeRequest` may change the SDK request before each batch; it must retain all `test_N` Noul questions so every candidate gets a result. `changes` and `tests` are available for context. Jev does not generate missing tests or a written explanation.
+`client` takes precedence over `providerKey` and `providerUrl`. The client must implement the TypeSafe SDK's `systemOne()` method.
 
-`defineConfigWithJev(jevConfig, playwrightConfig)` adds the Jev reporter to the configured reporters and returns a Playwright config. It also accepts a single reporter name such as `reporter: 'list'` and preserves the rest of Playwright's configuration.
+<br />
 
-Copy `.env.example` to `.env` for local variables and load it with Node (`node --env-file=.env ...`) or your shell. The package does not automatically load dotenv files.
+## Use it in CI
 
-## Programmatic API
+With no explicit `baseRef`, the reporter inspects the CI runner's environment and local event payload. It makes **no provider API calls and never fetches git history**. A PR or feature branch compares `HEAD` with the merge-base of its target/default branch. On a default-branch push, a previous-push SHA, when available, covers _every commit in that push_, including squash and merge commits.
+
+The checkout must contain `refs/remotes/origin/<target>` and sufficient history for branch comparisons. For example, configure a GitHub Actions checkout with `fetch-depth: 0`. If the baseline is missing, the full suite runs.
+
+An explicit `baseRef`, `JEV_PLAYWRIGHT_BASE_REF`, or `BASE_REF` overrides detection. For example, `BASE_REF=origin/main pnpm exec playwright test` compares their merge-base with `HEAD`. Outside CI, no provider detection runs.
+
+<details>
+<summary><strong>GitHub Actions</strong></summary>
+
+`GITHUB_ACTIONS` identifies the runner. PRs use `GITHUB_BASE_REF`; feature branches use the repository's `default_branch` from `GITHUB_EVENT_PATH`. A default-branch `push` uses the event payload's `before` SHA. Without a valid previous SHA, it runs all tests.
+
+</details>
+
+<details>
+<summary><strong>Gitea Actions</strong></summary>
+
+`GITEA_ACTIONS` takes precedence over GitHub's compatibility variables. PRs use `GITHUB_BASE_REF`; feature branches use the payload's `repository.default_branch`; default-branch pushes use `before` from `GITHUB_EVENT_PATH`.
+
+</details>
+
+<details>
+<summary><strong>GitLab CI</strong></summary>
+
+Merge requests use `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`; feature branches use `CI_DEFAULT_BRANCH`. Default-branch push pipelines use `CI_COMMIT_BEFORE_SHA`. An all-zero SHA, such as on a first or manual pipeline, triggers a full run.
+
+</details>
+
+<details>
+<summary><strong>Bitbucket Pipelines</strong></summary>
+
+PRs use `BITBUCKET_PR_DESTINATION_BRANCH`; feature branches compare against the configured default branch. Bitbucket does not provide a reliable previous-push SHA as a built-in variable, so default-branch builds run all tests unless you set `BASE_REF`.
+
+</details>
+
+<details>
+<summary><strong>Azure Pipelines</strong></summary>
+
+PRs use `SYSTEM_PULLREQUEST_TARGETBRANCH`; feature branches compare against the configured default branch. Azure does not provide a reliable previous-push SHA as a built-in variable, so default-branch builds run all tests unless you set `BASE_REF`.
+
+</details>
+
+If a provider cannot supply the default branch, `main` is assumed. Set `defaultBranch` or `JEV_PLAYWRIGHT_DEFAULT_BRANCH` for a different branch name. Unknown CI providers, tag builds, and incomplete CI context run all tests. You can inspect the chosen baseline with `await detectCiDiff(resolveConfig(options))`.
+
+<br />
+
+## Customize the decision
+
+Use `createQuestion` to change the relevance instructions. Use `beforeRequest` to add project context to each typed SDK request:
 
 ```ts
-import { selectTests, getGitChanges } from 'jev-playwright';
-
-const changes = await getGitChanges(process.cwd(), 'origin/main');
-const selection = await selectTests({
-  changes,
-  tests: [{ id: 'checkout', file: 'e2e/checkout.spec.ts', title: 'checkout' }],
-  config: { enabled: true, threshold: 0.6 },
-});
-console.log(selection.selectedIds, selection.assessments, selection.fallbackReason);
+export default defineConfigWithJev(
+  {
+    enabled: true,
+    prTitle: process.env.PR_TITLE,
+    createQuestion(test, key) {
+      return `Could this change affect the behavior tested by ${key} (${test.title})?`;
+    },
+    beforeRequest(request) {
+      // Include the product area when test titles alone are ambiguous.
+      return {
+        ...request,
+        state: { selection: request.state, product: 'billing' }
+      };
+    }
+  },
+  { reporter: [['list']] }
+);
 ```
 
-`selectTests` takes explicit changes and test descriptors, plus an optional SDK-compatible `client` to customize authentication or test without network access. `getGitChanges` is a convenience adapter; callers can supply their own `{ files, diff, title, description }` instead. `JevReporter` is also exported from the package root.
+`beforeRequest` may be async. Keep every `test_N` question as a Noul question; otherwise selection falls back to all tests. `prDescription` can be supplied alongside `prTitle`.
+
+<br />
+
+## Use the library programmatically
+
+When you already know the changed files and test catalog, call `selectTests()` without starting Playwright:
+
+```ts
+import { selectTests } from 'jev-playwright';
+
+const selection = await selectTests({
+  changes: {
+    files: ['src/checkout.ts'],
+    diff: '+ updated checkout behavior',
+    title: 'Fix checkout'
+  },
+  tests: [
+    {
+      id: 'checkout',
+      file: 'e2e/checkout.spec.ts',
+      title: 'customer checks out'
+    },
+    {
+      id: 'login',
+      file: 'e2e/login.spec.ts',
+      title: 'customer signs in'
+    }
+  ],
+  config: { enabled: true }
+});
+
+console.log(
+  selection.selectedIds,
+  selection.assessments,
+  selection.fallbackReason
+);
+```
+
+`id` must be unique in the supplied catalog. `assessments` contains each judged test's probability and resolved model. You can pass `client` to `selectTests()` to reuse a configured SDK client. `getGitChanges(cwd, baseRef?)` reads git changes for you; `detectCiDiff()` and `resolveConfig()` are available if your application owns the CI integration.
+
+<br />
 
 ## Configuration reference
 
-| Option | Environment variable | Default |
-| --- | --- | --- |
-| `enabled` | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`) | `false` |
-| `baseRef` | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF` | local changes |
-| `defaultBranch` | `JEV_PLAYWRIGHT_DEFAULT_BRANCH` | provider value, then `main` |
-| `cwd` | `JEV_PLAYWRIGHT_CWD` | `process.cwd()` |
-| `include` | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array) | `["**/*"]` |
-| `exclude` | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array) | `[]` |
-| `threshold` | `JEV_PLAYWRIGHT_THRESHOLD` | `0.5` |
-| `batchSize` | `JEV_PLAYWRIGHT_BATCH_SIZE` | `50` |
-| `includeTestSource` | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE` | `false` |
-| `maxTestSourceTokens` | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS` | `5000` (maximum `5000`) |
-| `model` | `JEV_PLAYWRIGHT_MODEL` | `jev-latest` |
-| `prTitle`, `prDescription` | `JEV_PLAYWRIGHT_PR_TITLE`, `JEV_PLAYWRIGHT_PR_DESCRIPTION` | unset |
-| `providerUrl`, `providerKey` | `JEV_PLAYWRIGHT_PROVIDER_URL`, `JEV_PLAYWRIGHT_PROVIDER_KEY` | SDK defaults |
-| `client`, `createQuestion`, `beforeRequest` | reporter options only | SDK client, built-in question, no hook |
+Environment variables override the corresponding reporter options. Set JSON arrays for glob variables, for example `JEV_PLAYWRIGHT_INCLUDE='["src/**","e2e/**"]'`.
 
-Environment variables override reporter options. Glob patterns match repository-relative changed paths using Node's `path.matchesGlob()`. The SDK also accepts its native `TYPESAFE_API_KEY` and `TYPESAFE_BASE_URL` when no provider options are set. Pin the model and evaluate selections against full-suite results before relying on skipped tests in CI.
+| Option                                      | Environment variable                                         | Default                                 |
+| ------------------------------------------- | ------------------------------------------------------------ | --------------------------------------- |
+| `enabled`                                   | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`)         | `false`                                 |
+| `baseRef`                                   | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF`                   | CI baseline or local changes            |
+| `defaultBranch`                             | `JEV_PLAYWRIGHT_DEFAULT_BRANCH`                              | provider value, then `main`             |
+| `cwd`                                       | `JEV_PLAYWRIGHT_CWD`                                         | `process.cwd()`                         |
+| `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                              |
+| `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                    |
+| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                   |
+| `batchSize`                                 | `JEV_PLAYWRIGHT_BATCH_SIZE`                                  | `50` (adjusted down for large excerpts) |
+| `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                 |
+| `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                 |
+| `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                            |
+| `prTitle`, `prDescription`                  | `JEV_PLAYWRIGHT_PR_TITLE`, `JEV_PLAYWRIGHT_PR_DESCRIPTION`   | unset                                   |
+| `providerUrl`, `providerKey`                | `JEV_PLAYWRIGHT_PROVIDER_URL`, `JEV_PLAYWRIGHT_PROVIDER_KEY` | SDK defaults                            |
+| `client`, `createQuestion`, `beforeRequest` | Playwright config only                                       | SDK client, built-in question, no hook  |
+
+<br />
+
+## Contributing
+
+To work on **this package** rather than install it in a Playwright project:
+
+1. Use Node.js 24.16+ and pnpm 12.6.0, then install dependencies with `pnpm install`.
+2. Copy the [`.env.example` template](https://github.com/arthurfiorette/jev-playwright/blob/main/.env.example) to `.env` and set a TypeSafe or OpenRouter key if you want to try a real Jev request. `.env` is gitignored. Load it explicitly with `node --env-file=.env ...` or your shell; the library does not automatically load dotenv files. Unit and Playwright fixture tests do not need a key.
+3. Run `pnpm build` first. The Playwright integration fixture imports the built reporter from `dist/`.
+4. Run `pnpm test-types`, `pnpm test`, and `pnpm lint-ci`.
+
+<br />
+
+## License
+
+[MIT](LICENSE).

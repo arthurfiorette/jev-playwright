@@ -147,6 +147,30 @@ test('source context is opt-in and bounded per candidate', () => {
   assert.equal(
     (withSource.state as { candidates: { test_0: { source: string } } }).candidates.test_0.source
       .length,
-    120
+    60
   );
+});
+
+test('source-aware batching uses actual excerpt sizes', async () => {
+  const batchSizes: number[] = [];
+  const mockedClient: Pick<TypeSafeClient, 'systemOne'> = {
+    systemOne: (async ({ questions }: { questions: Record<string, unknown> }) => {
+      const keys = Object.keys(questions);
+      batchSizes.push(keys.length);
+      return {
+        model: 'mock',
+        answers: Object.fromEntries(keys.map((key) => [key, { type: 'noul', noul: 1 }]))
+      };
+    }) as unknown as TypeSafeClient['systemOne']
+  };
+
+  const selection = await selectTests({
+    tests: tests.map((candidate) => ({ ...candidate, source: 'x'.repeat(15_000) })),
+    changes: { files: ['src/feature.ts'] },
+    config: { enabled: true, includeTestSource: true, cwd: '/repo' },
+    client: mockedClient
+  });
+
+  assert.deepEqual(batchSizes, [2, 1]);
+  assert.deepEqual(selection.selectedIds, ['a', 'b', 'c']);
 });
