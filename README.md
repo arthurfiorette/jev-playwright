@@ -18,7 +18,7 @@
 
 **Run the Playwright tests relevant to a code change.** Add one reporter; it uses [Jev](https://docs.typesafe.ai/) to select existing tests before they run. If selection cannot be completed, Playwright runs the full suite.
 
-Package-aware tools such as Turborepo and Nx can scope unit tests using the changed-package graph. E2E tests are harder: a single browser journey can cross many packages, pages, and services. `jev-playwright` compares the change with Playwright's discovered tests to select relevant journeys **before browser execution**, reducing test runtime in large CI suites. It does not eliminate the time spent provisioning the E2E stack.
+Package-aware tools such as Turborepo and Nx can scope unit tests using the changed-package graph. E2E tests are harder: a single browser journey can cross many packages, pages, and services. `jev-playwright` compares the change with Playwright's discovered tests to select relevant journeys **before browser execution**, reducing test runtime in large CI suites.
 
 Requires **Node.js 24.16+** and **Playwright 1.62+**. [Get started](#get-started) · [Smart diff selection](#smart-diff-selection) · [Choose a provider](#choose-a-jev-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
 
@@ -70,11 +70,11 @@ Playwright discovers tests first, respecting your project and test filters. Then
 
 1. Reads staged, unstaged, and untracked changes locally, or [chooses a CI baseline](#use-it-in-ci).
 2. Always includes directly changed specs. Jev scores the remaining tests against the change using their titles and file paths.
-3. Runs tests at or above `threshold` (default `0.5`). If selection cannot be completed, it runs the full suite.
+3. Runs tests at or above `threshold` (default `0.55`). If selection cannot be completed, it runs the full suite.
 
 ### Include test source (optional)
 
-Test bodies are **not sent by default**. Set `includeTestSource: true` to send each test's body and immediately preceding comments, which can help when a title alone doesn't describe its assertions or POM calls. The excerpt is limited to 5,000 JavaScript lexical tokens (and 15,000 characters) per test. If the source is unavailable, Jev can still judge that test by its title and path. It does not read POM implementations.
+Test bodies and immediately preceding comments **are sent by default** to help Jev judge assertions and POM calls. Set `includeTestSource: false` to send only test titles and paths. Each excerpt is limited to 5,000 JavaScript lexical tokens (and 15,000 characters). If source is unavailable, the test remains a candidate using its title and path. POM implementations are not included.
 
 By default, the same test in multiple Playwright projects shares one decision. Set `perProject: true` when Chromium, Firefox, or WebKit could need different selections.
 
@@ -145,7 +145,7 @@ Descriptions are converted to plain text and limited to 2,000 characters; titles
 
 The reporter skips all tests only after **every** required chunk is evaluated. Programmatic callers supplying an oversized diff must also supply per-file `patches`; otherwise the full suite runs.
 
-To inspect selection, run with `DEBUG=jev-playwright:*`. Logs show changed paths, forced specs, request contents, and Jev's responses. They can contain source code and PR text.
+To inspect selection, run with `DEBUG=jev-playwright:*`. Logs show changed paths and a short summary per request: context size, candidate count, model usage, selected count, the highest-scoring 10% and lowest-scoring 5% of selected tests, and the highest- and lowest-scoring 5% of excluded tests (at least five from each group when available). They do not dump patches or every prompt/score. Use `DEBUG=jev-playwright:batch` for request summaries only, or `jev-playwright:source` to investigate omitted test bodies.
 
 <br />
 
@@ -325,7 +325,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                                                    |
 | `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                                          |
 | `excludeGeneratedFiles`                     | `JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES`                     | `true`                                                        |
-| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                                         |
+| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.55`                                                        |
 | `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all` (ignore whitespace-only changes); `none` preserves them |
 | `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                     | `false`                                                       |
 | `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `3`                                                           |
@@ -333,7 +333,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `limits.requestTokens`                      | `JEV_PLAYWRIGHT_LIMITS_REQUEST_TOKENS`                       | `64000`                                                       |
 | `limits.maxRequests`                        | `JEV_PLAYWRIGHT_LIMITS_MAX_REQUESTS`                         | `100`                                                         |
 | `limits.maxConcurrentRequests`              | `JEV_PLAYWRIGHT_LIMITS_MAX_CONCURRENT_REQUESTS`              | `5`                                                           |
-| `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `false`                                                       |
+| `includeTestSource`                         | `JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE`                         | `true`                                                        |
 | `perProject`                                | `JEV_PLAYWRIGHT_PER_PROJECT`                                 | `false` (share decisions across projects)                     |
 | `maxTestSourceTokens`                       | `JEV_PLAYWRIGHT_MAX_TEST_SOURCE_TOKENS`                      | `5000` (maximum `5000`)                                       |
 | `model`                                     | `JEV_PLAYWRIGHT_MODEL`                                       | `jev-latest`                                                  |

@@ -1,11 +1,13 @@
 import type { Reporter, TestCase } from '@playwright/test/reporter';
+import createDebug from 'debug';
 import { detectCiDiff } from './ci.js';
 import type { JevPlaywrightConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
-import { reporterDebug } from './debug.js';
 import { getCommitMessage, getGitChanges } from './git.js';
 import { sameFile, selectTests } from './selection.js';
 import { withTestSource } from './source.js';
+
+const debug = createDebug('jev-playwright:reporter');
 
 /** Playwright 1.62+ reporter that excludes irrelevant tests before execution. */
 export class JevReporter implements Reporter {
@@ -37,7 +39,7 @@ export class JevReporter implements Reporter {
       if (!tests.length) return;
 
       const ciDiff = await detectCiDiff(config);
-      reporterDebug('git baseline %O', ciDiff);
+      debug('git baseline %O', ciDiff);
       if (ciDiff.kind === 'unavailable') {
         process.stderr.write(
           `[jev-playwright] Running all tests: ${ciDiff.provider}: ${ciDiff.reason}\n`
@@ -60,16 +62,16 @@ export class JevReporter implements Reporter {
         if (description) changes.description = description;
       }
       const root = changes.root ?? config.cwd;
-      reporterDebug('changed paths %O', changes.files);
-      reporterDebug('generated paths %O', changes.generatedFiles);
-      reporterDebug('included paths %O', filterPaths(changes.files, config));
-      reporterDebug(
+      debug('changed paths %O', changes.files);
+      debug('generated paths %O', changes.generatedFiles);
+      debug('included paths %O', filterPaths(changes.files, config));
+      debug(
         'forced spec paths %O',
         tests
           .filter((test) => changes.files.some((file) => sameFile(file, test.location.file, root)))
           .map((test) => test.location.file)
       );
-      reporterDebug('model name-status %O', changes.statuses);
+      debug('model name-status %O', changes.statuses);
       const catalog = tests.map((test) => ({
         id: test.id,
         file: test.location.file,
@@ -78,7 +80,7 @@ export class JevReporter implements Reporter {
         title: test.titlePath().slice(3).join('›') || test.title,
         project: test.parent.project()?.name ?? ''
       }));
-      reporterDebug('test source %O', {
+      debug('test source %O', {
         included: config.includeTestSource,
         ...(config.includeTestSource ? { maxLexicalTokensPerTest: config.maxTestSourceTokens } : {})
       });

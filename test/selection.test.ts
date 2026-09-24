@@ -39,6 +39,17 @@ test('config precedence, glob filtering, and validation', () => {
   );
   assert.equal(config.baseRef, 'main');
   assert.equal(config.threshold, 0.4);
+  assert.equal(resolveConfig({}, {}).threshold, 0.55);
+  assert.equal(resolveConfig({}, {}).includeTestSource, true);
+  assert.equal(
+    resolveConfig(
+      { includeTestSource: true },
+      {
+        JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE: 'false'
+      }
+    ).includeTestSource,
+    false
+  );
   assert.equal(config.perProject, false);
   assert.equal(config.excludeGeneratedFiles, true);
   assert.equal(
@@ -334,10 +345,15 @@ test('environment overrides config for provider and selection options', () => {
   assert.equal(config.enabled, true);
 });
 
-test('source context is opt-in and bounded per candidate', () => {
+test('source context is on by default, can be disabled, and is bounded per candidate', () => {
   const candidate = { ...tests[0]!, source: 'x'.repeat(2_000) };
   const changes = { files: ['src/login.ts'] };
-  const without = createRequest([candidate], changes, resolveConfig({}, {}));
+  const without = createRequest(
+    [candidate],
+    changes,
+    resolveConfig({ includeTestSource: false }, {})
+  );
+  const defaultSource = createRequest([candidate], changes, resolveConfig({}, {}));
   const withSource = createRequest(
     [candidate],
     changes,
@@ -345,6 +361,7 @@ test('source context is opt-in and bounded per candidate', () => {
   );
 
   assert.doesNotMatch(String(without.questions.test_0?.instructions), /x{60}/);
+  assert.match(String(defaultSource.questions.test_0?.instructions), /x{60}/);
   assert.match(String(withSource.questions.test_0?.instructions), /x{60}/);
 });
 

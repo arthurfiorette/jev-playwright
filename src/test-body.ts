@@ -1,5 +1,7 @@
+import createDebug from 'debug';
 import { parseSync, Visitor } from 'oxc-parser';
-import { selectionDebug } from './debug.js';
+
+const debug = createDebug('jev-playwright:test-body');
 
 /** Location of a Playwright-discovered test, indexed into its matching descriptor. */
 export interface TestLocation {
@@ -102,7 +104,7 @@ export function extractTestBodies(
           (body) => location.column === undefined || body.columns.includes(location.column)
         ) ?? [];
     if (matches.length !== 1) {
-      selectionDebug(
+      debug(
         'source omitted: cannot locate test callback at %s:%d:%s',
         file,
         location.line,

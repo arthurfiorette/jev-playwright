@@ -1,10 +1,13 @@
 import { realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { TypeSafeClient } from '@typesafe-ai/sdk';
+import createDebug from 'debug';
+
+const debug = createDebug('jev-playwright:selection');
+
 import { runBatches } from './batch.js';
 import type { JevPlaywrightConfig, ResolvedConfig } from './config.js';
 import { filterPaths, resolveConfig } from './config.js';
-import { selectionDebug } from './debug.js';
 import type { Changes } from './git.js';
 import { createRequest } from './prompt.js';
 import { fitsRequestLimits } from './request-limits.js';
@@ -188,7 +191,7 @@ async function assessEveryChange(
   const contexts = fitsRequestLimits(createRequest([first], changes, config), config.limits)
     ? [changes]
     : chunkChanges(changes, first, config);
-  selectionDebug(
+  debug(
     'diff chunks %O',
     contexts.map((context, index) => ({
       index: index + 1,
@@ -243,7 +246,7 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
   const modelFiles = files.filter(
     (file) => !generated.has(file) && !changedSpecs.some((test) => sameFile(file, test.file, root))
   );
-  selectionDebug('model paths %O', modelFiles);
+  debug('model paths %O', modelFiles);
   if (!modelFiles.length) {
     return forced.size
       ? {
@@ -259,7 +262,7 @@ export async function selectTests(input: SelectionInput): Promise<Selection> {
     return { selectedIds: input.tests.map((test) => test.id), assessments: [] };
   try {
     const groups = groupCandidates(candidates, config);
-    selectionDebug('candidate groups %O', {
+    debug('candidate groups %O', {
       discovered: candidates.length,
       questions: groups.length,
       perProject: config.perProject

@@ -1,10 +1,12 @@
 import type { TypeSafeClient } from '@typesafe-ai/sdk';
+import createDebug from 'debug';
 import type { ResolvedConfig } from './config.js';
-import { selectionDebug } from './debug.js';
 import type { Changes } from './git.js';
 import { createRequest } from './prompt.js';
 import { fitsRequestLimits } from './request-limits.js';
 import type { Assessment, TestDescriptor } from './selection.js';
+
+const debug = createDebug('jev-playwright:batch');
 
 interface PlannedBatch {
   tests: TestDescriptor[];
@@ -15,6 +17,49 @@ interface BatchQueue {
   next: number;
   stopped: boolean;
   results: Assessment[][];
+}
+
+function sampleAssessments(
+  entries: Assessment[],
+  titles: Map<string, string>,
+  portion: number,
+  direction: 'top' | 'bottom'
+): Array<{ title: string | undefined; probability: number }> {
+  return entries
+    .toSorted((a, b) =>
+      direction === 'top' ? b.probability - a.probability : a.probability - b.probability
+    )
+    .slice(0, Math.max(5, Math.ceil(entries.length * portion)))
+    .map((assessment) => ({
+      title: titles.get(assessment.id),
+      probability: assessment.probability
+    }));
+}
+
+function logBatchResult(
+  requestNumber: number,
+  tests: TestDescriptor[],
+  assessments: Assessment[],
+  model: string,
+  inputTokens: number | undefined,
+  threshold: number
+): void {
+  if (!debug.enabled) return;
+
+  const selected = assessments.filter((assessment) => assessment.probability >= threshold);
+  const excluded = assessments.filter((assessment) => assessment.probability < threshold);
+  const titles = new Map(tests.map((test) => [test.id, test.title]));
+
+  debug('request %d result %O', requestNumber, {
+    model,
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    selected: selected.length,
+    total: tests.length,
+    topSelected: sampleAssessments(selected, titles, 0.1, 'top'),
+    bottomSelected: sampleAssessments(selected, titles, 0.05, 'bottom'),
+    topExcluded: sampleAssessments(excluded, titles, 0.05, 'top'),
+    bottomExcluded: sampleAssessments(excluded, titles, 0.05, 'bottom')
+  });
 }
 
 function nextCandidateBatch(
@@ -97,10 +142,15 @@ async function assessBatch(
     throw new Error('Jev request exceeds configured limits after beforeRequest');
   }
 
-  selectionDebug(`request ${requestNumber} state %O`, prepared.state);
-  selectionDebug(`request ${requestNumber} questions %O`, prepared.questions);
+  if (debug.enabled) {
+    debug(
+      'request %d: candidates=%d, contextBytes=%d',
+      requestNumber,
+      tests.length,
+      Buffer.byteLength(JSON.stringify(prepared.state), 'utf8')
+    );
+  }
   const response = await client.systemOne(prepared);
-  selectionDebug(`request ${requestNumber} response %O`, response);
 
   const assessments: Assessment[] = [];
   for (const [index, test] of tests.entries()) {
@@ -115,6 +165,15 @@ async function assessBatch(
     }
     assessments.push({ id: test.id, probability: answer.noul, model: response.model });
   }
+
+  logBatchResult(
+    requestNumber,
+    tests,
+    assessments,
+    response.model,
+    response.usage?.input_tokens,
+    config.threshold
+  );
 
   return assessments;
 }
@@ -149,7 +208,7 @@ export async function runBatches(
 ): Promise<Assessment[]> {
   const plan = planRequests(contexts, candidates, config);
   const count = Math.min(config.limits.maxConcurrentRequests, plan.length);
-  selectionDebug('request plan %O', { batches: plan.length, concurrency: count });
+  debug('request plan %O', { batches: plan.length, concurrency: count });
 
   const queue: BatchQueue = { next: 0, stopped: false, results: [] };
   const workers = Array.from({ length: count }, () =>

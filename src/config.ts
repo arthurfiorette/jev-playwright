@@ -49,11 +49,11 @@ export interface JevPlaywrightConfig {
   excludeGeneratedFiles?: boolean;
   /** How git formats the patch sent to Jev. @default { whitespace: 'all', ignoreBlankLines: false, contextLines: 3 } */
   diff?: JevDiffConfig;
-  /** Select tests at or above this yes probability. @default 0.5 */
+  /** Select tests at or above this yes probability. @default 0.55 */
   threshold?: number;
   /** Model input budgets; change these when using a provider with different limits. @default TypeSafe Jev limits */
   limits?: JevRequestLimits;
-  /** Include a bounded source excerpt starting at each test declaration. @default false */
+  /** Send each test callback body and leading comments to Jev. @default true */
   includeTestSource?: boolean;
   /** Maximum JavaScript lexical tokens per test when enabled. @default 5000 */
   maxTestSourceTokens?: number;
@@ -232,7 +232,9 @@ export function resolveConfig(
         3
     },
     threshold:
-      parseNumber(readEnv(env, 'THRESHOLD'), 'JEV_PLAYWRIGHT_THRESHOLD') ?? config.threshold ?? 0.5,
+      parseNumber(readEnv(env, 'THRESHOLD'), 'JEV_PLAYWRIGHT_THRESHOLD') ??
+      config.threshold ??
+      0.55,
     limits: {
       stateAndQuestionTokens:
         parseNumber(
@@ -263,7 +265,7 @@ export function resolveConfig(
     includeTestSource:
       parseBoolean(readEnv(env, 'INCLUDE_TEST_SOURCE'), 'JEV_PLAYWRIGHT_INCLUDE_TEST_SOURCE') ??
       config.includeTestSource ??
-      false,
+      true,
     maxTestSourceTokens:
       parseNumber(
         readEnv(env, 'MAX_TEST_SOURCE_TOKENS'),

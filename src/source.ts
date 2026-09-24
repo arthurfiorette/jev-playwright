@@ -1,10 +1,12 @@
 import { readFile, stat } from 'node:fs/promises';
 import type { TestCase } from '@playwright/test/reporter';
+import createDebug from 'debug';
 import jsTokens from 'js-tokens';
-import { selectionDebug } from './debug.js';
 import type { TestDescriptor } from './selection.js';
 import type { TestLocation } from './test-body.js';
 import { extractTestBodies } from './test-body.js';
+
+const debug = createDebug('jev-playwright:source');
 
 interface FileGroup {
   file: string;
@@ -84,7 +86,7 @@ async function extractFileSources(group: FileGroup, maxTokens: number): Promise<
     });
   } catch (error) {
     // Source context is optional; keep the test available for title/path-based selection.
-    selectionDebug('source omitted for %s: %O', group.file, error);
+    debug('source omitted for %s: %O', group.file, error);
     return [];
   }
 }
