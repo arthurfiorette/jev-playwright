@@ -32,7 +32,33 @@ export default defineConfigWithJev(
 BASE_REF=origin/main JEV_PLAYWRIGHT_PROVIDER_KEY=... pnpm playwright test
 ```
 
-`BASE_REF` compares the merge-base with `HEAD`. Without a base ref, git supplies staged, unstaged and untracked changes. Directly changed test files always run. Changes without an included path and changes too large for the model fall back to the full suite. Ordinary runs with `enabled: false` do not make an API call.
+`BASE_REF` compares the merge-base with `HEAD`. Without a base ref, CI runs choose a baseline from the provider context below; local runs use staged, unstaged and untracked changes. Directly changed test files always run. Changes without an included path and changes too large for the model fall back to the full suite. Ordinary runs with `enabled: false` do not make an API call.
+
+## CI diff baselines
+
+Detection uses only the runner's environment, its local event JSON (where provided), and git. It makes **no provider API calls or automatic fetches**. `baseRef` or `JEV_PLAYWRIGHT_BASE_REF`/`BASE_REF` overrides the detected baseline. For branch comparisons, the local checkout must contain `refs/remotes/origin/<target>` and enough history to find its merge-base with `HEAD`. If the ref, history, or previous push SHA is missing, the reporter runs the full suite. Configure your CI checkout for full history and the target branch when enabling selection.
+
+### GitHub Actions
+
+`GITHUB_ACTIONS` identifies the runner. Pull requests use `GITHUB_BASE_REF` as `origin/<target>`; other branch builds compare against `origin/<default branch>`. On pushes to the default branch, `GITHUB_EVENT_PATH` supplies the `before` SHA so **all commits in the push** are included, including squash and normal merge commits. The event payload also supplies `repository.default_branch`. A default-branch build without a valid push `before` SHA runs all tests.
+
+### Gitea Actions
+
+`GITEA_ACTIONS` takes precedence over GitHub's compatibility variables. Gitea exposes `GITHUB_BASE_REF`, `GITHUB_REF`, and `GITHUB_EVENT_PATH`. PRs compare against the target branch; other branches compare against the repository default branch; default-branch pushes use the event payload's `before` SHA. Missing context runs all tests.
+
+### GitLab CI
+
+`GITLAB_CI` identifies the runner. Merge requests use `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`; other branches compare against `CI_DEFAULT_BRANCH`. Pushes to the default branch use `CI_COMMIT_BEFORE_SHA`. GitLab uses an all-zero previous SHA for some pipeline types; those runs use the full suite.
+
+### Bitbucket Pipelines
+
+`BITBUCKET_BUILD_NUMBER` identifies the runner. PRs use `BITBUCKET_PR_DESTINATION_BRANCH`; feature branches compare against the default branch. Bitbucket does not expose a reliable previous push SHA as a built-in variable, so default-branch builds run all tests unless you set `BASE_REF` explicitly.
+
+### Azure Pipelines
+
+`TF_BUILD` identifies the runner. PRs use `SYSTEM_PULLREQUEST_TARGETBRANCH`; feature branches compare against the default branch. Azure does not expose a reliable previous push SHA as a built-in variable, so default-branch builds run all tests unless you set `BASE_REF` explicitly.
+
+The default branch falls back to `main` if the provider does not supply it. Set `defaultBranch` or `JEV_PLAYWRIGHT_DEFAULT_BRANCH` for repositories using another name. Unknown CI providers, tag builds, and incomplete CI context run all tests. Outside CI, no provider detection takes place. You can inspect the chosen baseline programmatically with `detectCiDiff(resolveConfig(options))`.
 
 `includeTestSource` optionally sends an excerpt starting at each test declaration (up to 40 lines, capped at 5,000 JavaScript lexical tokens by default). This exposes assertions and POM call sites without repeatedly sending entire spec files. `js-tokens` counts code tokens, not Jev's model tokens, so excerpts also have a 25,000-character hard cap and large excerpts reduce batch size. It does not follow imports into POM implementations. The source is sent to the configured provider, so only enable it for tests you intend to share.
 
@@ -91,6 +117,7 @@ console.log(selection.selectedIds, selection.assessments, selection.fallbackReas
 | --- | --- | --- |
 | `enabled` | `JEV_PLAYWRIGHT_ENABLED` (`true`/`false` or `1`/`0`) | `false` |
 | `baseRef` | `JEV_PLAYWRIGHT_BASE_REF`, then `BASE_REF` | local changes |
+| `defaultBranch` | `JEV_PLAYWRIGHT_DEFAULT_BRANCH` | provider value, then `main` |
 | `cwd` | `JEV_PLAYWRIGHT_CWD` | `process.cwd()` |
 | `include` | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array) | `["**/*"]` |
 | `exclude` | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array) | `[]` |

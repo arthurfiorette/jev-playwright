@@ -1,4 +1,5 @@
 import type { Reporter, TestCase } from '@playwright/test/reporter';
+import { detectCiDiff } from './ci.js';
 import type { JevPlaywrightConfig } from './config.js';
 import { resolveConfig } from './config.js';
 import { getGitChanges } from './git.js';
@@ -33,7 +34,20 @@ export class JevReporter implements Reporter {
         .allTests()
         .filter((test) => !readOnly.has(test.parent.project()?.name ?? ''));
       if (!tests.length) return;
-      const changes = await getGitChanges(config.cwd, config.baseRef, config);
+
+      const ciDiff = await detectCiDiff(config);
+      if (ciDiff.kind === 'unavailable') {
+        process.stderr.write(
+          `[jev-playwright] Running all tests: ${ciDiff.provider}: ${ciDiff.reason}\n`
+        );
+        return;
+      }
+
+      const changes = await getGitChanges(
+        config.cwd,
+        ciDiff.kind === 'ref' ? ciDiff.baseRef : undefined,
+        config
+      );
       const catalog = tests.map((test) => ({
         id: test.id,
         file: test.location.file,

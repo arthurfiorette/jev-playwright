@@ -9,6 +9,8 @@ export interface JevPlaywrightConfig {
   enabled?: boolean;
   /** Git revision compared to HEAD via merge-base; also reads BASE_REF. @default undefined (local changes) */
   baseRef?: string;
+  /** Default branch name for CI detection, when the provider cannot supply one. @default 'main' */
+  defaultBranch?: string;
   /** Project directory containing the git repository. @default process.cwd() */
   cwd?: string;
   /** Only these changed paths are sent to Jev. @default ['**\/*'] */
@@ -50,6 +52,7 @@ export interface ResolvedConfig
     Omit<
       JevPlaywrightConfig,
       | 'baseRef'
+      | 'defaultBranch'
       | 'prTitle'
       | 'prDescription'
       | 'providerUrl'
@@ -60,6 +63,7 @@ export interface ResolvedConfig
     >
   > {
   baseRef: string | undefined;
+  defaultBranch: string | undefined;
   prTitle: string | undefined;
   prDescription: string | undefined;
   providerUrl: string | undefined;
@@ -133,6 +137,7 @@ export function resolveConfig(
     enabled:
       parseBoolean(readEnv(env, 'ENABLED'), 'JEV_PLAYWRIGHT_ENABLED') ?? config.enabled ?? false,
     baseRef: readEnv(env, 'BASE_REF') ?? env.BASE_REF ?? config.baseRef,
+    defaultBranch: readEnv(env, 'DEFAULT_BRANCH') ?? config.defaultBranch,
     cwd: readEnv(env, 'CWD') ?? config.cwd ?? process.cwd(),
     include: parseGlobs(readEnv(env, 'INCLUDE'), 'JEV_PLAYWRIGHT_INCLUDE') ??
       config.include ?? ['**/*'],
