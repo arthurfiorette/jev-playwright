@@ -97,14 +97,13 @@ export function createRequest(
   return {
     model: config.model,
     state: [
-      ...(title ? [`Title: ${title}`] : []),
-      ...(description ? [`Description: ${description}`] : []),
       // Keep shared decision guidance out of the per-test questions to avoid multiplying request size.
-      config.relevanceGuidance,
-      'Changed files (status and path):',
-      ...changedPaths(changes),
-      ...(changes.diff ? ['Patch:', changes.diff] : [])
-    ].join('\n'),
+      `Selection guidance:\n${config.relevanceGuidance}`,
+      ...(title ? [`Change title:\n${title}`] : []),
+      ...(description ? [`Change description:\n${description}`] : []),
+      `Changed files (status and path):\n${changedPaths(changes).join('\n')}`,
+      ...(changes.diff ? [`Patch:\n${changes.diff}`] : [])
+    ].join('\n\n'),
     questions
   };
 }

@@ -41,7 +41,7 @@ test('debug logs full requests, masked config, and one combined selection with l
               noul: question.instructions.includes('checkout')
                 ? 0.9
                 : question.instructions.includes('login')
-                  ? 0.5
+                  ? 0.49
                   : 0.1
             }
           ])

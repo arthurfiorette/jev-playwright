@@ -20,6 +20,9 @@
 
 Package-aware tools such as Turborepo and Nx can scope unit tests using the changed-package graph. E2E tests are harder: a single browser journey can cross many packages, pages, and services. `jev-playwright` compares the change with Playwright's discovered tests to select relevant journeys **before browser execution**, reducing test runtime in large CI suites.
 
+> [!WARNING]
+> This is a relevance filter, not a guarantee that every affected test will run. Its goal is to skip many clearly unrelated tests while keeping plausibly affected ones; it can still miss tests. Keep full-suite coverage where completeness matters.
+
 **Requirements:** Node.js 24.16+ (declared by this package) and Playwright 1.62+ (required for reporter `preprocess()`). [Get started](#get-started) · [Choose an AI provider](#choose-an-ai-provider) · [Use it in CI](#use-it-in-ci) · [Configuration reference](#configuration-reference)
 
 <br />
@@ -74,7 +77,7 @@ Playwright discovers tests first, respecting your project and test filters. Then
 
 1. Reads staged, unstaged, and untracked changes locally, or [chooses a CI baseline](#use-it-in-ci).
 2. Always includes directly changed specs. Jev scores the remaining tests against the change using their titles and file paths.
-3. Runs tests at or above `threshold` (default `0.55`). If selection cannot be completed, it runs the full suite.
+3. Runs tests at or above `threshold` (default `0.5`). If selection cannot be completed, it runs the full suite.
 
 Each score is Jev's estimated **probability that the change could affect that test's behavior or setup**. TypeSafe describes these probabilities as [calibrated in aggregate](https://docs.typesafe.ai/confidence), but a score is not the probability that a test will fail or a guarantee that other tests cannot be affected. Start with the default threshold, compare selections against full-suite results for your own changes, then tune it. A higher threshold runs fewer tests but increases the chance of missing one.
 
@@ -370,9 +373,9 @@ Run with `DEBUG=jev-playwright:batch,jev-playwright:selection` for compact reque
 jev-playwright:batch request 1: candidates=68, contextBytes=8200
 jev-playwright:batch request 1 result { model: 'typesafe/jev-1.13', selected: 4, total: 68 }
 jev-playwright:selection selection result {
-  selected: 4, excluded: 64, threshold: 0.55,
+  selected: 4, excluded: 64, threshold: 0.5,
   topSelected: [{ title: 'customer checks out', location: 'e2e/checkout.spec.ts:12:3', probability: 0.91 }],
-  topExcluded: [{ title: 'customer signs in', location: 'e2e/login.spec.ts:28:3', probability: 0.54 }]
+  topExcluded: [{ title: 'customer signs in', location: 'e2e/login.spec.ts:28:3', probability: 0.49 }]
 }
 [jev-playwright] Selected 4/68 tests
 ```
@@ -394,7 +397,7 @@ Environment variables override the corresponding reporter options. Set JSON arra
 | `include`                                   | `JEV_PLAYWRIGHT_INCLUDE` (JSON string array)                 | `["**/*"]`                                                    |
 | `exclude`                                   | `JEV_PLAYWRIGHT_EXCLUDE` (JSON string array)                 | `[]`                                                          |
 | `excludeGeneratedFiles`                     | `JEV_PLAYWRIGHT_EXCLUDE_GENERATED_FILES`                     | `true`                                                        |
-| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.55`                                                        |
+| `threshold`                                 | `JEV_PLAYWRIGHT_THRESHOLD`                                   | `0.5`                                                         |
 | `diff.whitespace`                           | `JEV_PLAYWRIGHT_DIFF_WHITESPACE`                             | `all` (ignore whitespace-only changes); `none` preserves them |
 | `diff.ignoreBlankLines`                     | `JEV_PLAYWRIGHT_DIFF_IGNORE_BLANK_LINES`                     | `false`                                                       |
 | `diff.contextLines`                         | `JEV_PLAYWRIGHT_DIFF_CONTEXT_LINES`                          | `3`                                                           |

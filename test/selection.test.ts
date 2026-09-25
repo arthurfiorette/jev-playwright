@@ -39,7 +39,7 @@ test('config precedence, glob filtering, and validation', () => {
   );
   assert.equal(config.baseRef, 'main');
   assert.equal(config.threshold, 0.4);
-  assert.equal(resolveConfig({}, {}).threshold, 0.55);
+  assert.equal(resolveConfig({}, {}).threshold, 0.5);
   assert.equal(resolveConfig({}, {}).includeTestSource, true);
   assert.equal(
     resolveConfig(
@@ -344,7 +344,7 @@ test('shared relevance guidance and each criterion are configurable independentl
   );
   const request = createRequest([tests[0]!], { files: ['src/billing.ts'] }, config);
   assert.match(String(request.state), /Only changes to billing can matter/);
-  assert.doesNotMatch(String(request.state), /Relevance includes direct effects/);
+  assert.doesNotMatch(String(request.state), /Exclude clearly unrelated tests/);
   const question = request.questions.test_0;
   assert.equal(question?.type, 'noul');
   if (question?.type !== 'noul') throw new Error('Expected a noul question');
@@ -365,7 +365,6 @@ test('relevance criteria stay within a small per-test request budget', () => {
   );
   const original = {
     ...request,
-    state: String(request.state).replace(/^Relevance includes.*\n/m, ''),
     questions: Object.fromEntries(
       Object.entries(request.questions).map(([key, question]) => [
         key,
@@ -381,6 +380,7 @@ test('relevance criteria stay within a small per-test request budget', () => {
   };
   const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
   assert.ok(bytes(request) - bytes(original) <= catalog.length * 80);
+  assert.ok(Buffer.byteLength(resolveConfig({}, {}).relevanceGuidance) <= 1_500);
 });
 
 test('environment overrides config for provider and selection options', () => {
@@ -444,15 +444,40 @@ test('string state keeps compact statuses and bounded human hints', () => {
     String(question.criteria?.false),
     /No plausible effect.*setup, execution, or assertions/
   );
-  assert.match(state, /Relevance includes direct effects and indirect effects via dependencies/);
-  assert.match(state, /Patch:\n\+updated payments/);
-  assert.ok(state.length < 3_000);
+  assert.match(state, /^Selection guidance:\nExclude clearly unrelated tests/);
+  assert.match(state, /\n\nPatch:\n\+updated payments$/);
+  const description = state.match(/Change description:\n(.*?)\n\nChanged files/s)?.[1];
+  assert.equal(description?.length, 2_000);
+});
+
+test('state preserves markup and operators without escaping section content', () => {
+  const patch = '+<Button title="A & B">Save</Button>\n+</patch>\n+if (a < b && b > 0) {}';
+  const state = String(
+    createRequest(
+      [tests[0]!],
+      {
+        files: ['src/a&b.tsx'],
+        title: 'Fix <Button> & form',
+        diff: patch
+      },
+      resolveConfig({ relevanceGuidance: 'Keep <likely> & indirect effects.' }, {})
+    ).state
+  );
+  assert.equal(
+    state,
+    [
+      'Selection guidance:\nKeep <likely> & indirect effects.',
+      'Change title:\nFix <Button> & form',
+      'Changed files (status and path):\n? src/a&b.tsx',
+      `Patch:\n${patch}`
+    ].join('\n\n')
+  );
 });
 
 test('empty hints are omitted and generated PR markup is compacted before capping', () => {
   const config = resolveConfig({}, {});
   const blank = String(createRequest([tests[0]!], { files: ['src/payments.ts'] }, config).state);
-  assert.doesNotMatch(blank, /^Title:|^Description:/m);
+  assert.doesNotMatch(blank, /^Change title:|^Change description:|^Patch:/m);
 
   const marked = String(
     createRequest(
@@ -467,8 +492,8 @@ test('empty hints are omitted and generated PR markup is compacted before cappin
       config
     ).state
   );
-  assert.match(marked, /Title: Fix payments/);
-  assert.match(marked, /Description: Notes Checkout now works\./);
+  assert.match(marked, /Change title:\nFix payments\n\n/);
+  assert.match(marked, /Change description:\nNotes Checkout now works\.\n\n/);
   assert.doesNotMatch(marked, /generated|screenshot\.png|<details>|example\.com/);
 });
 
