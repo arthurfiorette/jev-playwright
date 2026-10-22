@@ -43,7 +43,7 @@
     "test-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "^0.6.0",
+    "@typesafe-ai/sdk": "^0.7.0",
     "debug": "^4.4.3",
     "js-tokens": "^10.0.0",
     "oxc-parser": "^0.151.0",
